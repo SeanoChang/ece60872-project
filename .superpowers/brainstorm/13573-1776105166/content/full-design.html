@@ -1,0 +1,272 @@
+<h2>Design Section 3: Complete System Design Summary</h2>
+<p class="subtitle">Everything we've agreed on — review before I write the spec</p>
+
+<div class="section">
+  <h3>1. What We're Building</h3>
+  <div style="background: #1e293b; border-radius: 8px; padding: 20px; border-left: 4px solid #4fc3f7;">
+    <p style="color: #e0e0e0; font-size: 15px; line-height: 1.8; margin: 0;">
+      A <strong style="color:#4fc3f7;">multi-judge voting system</strong> that replaces human approval in Claude Code.
+      Instead of a human clicking "approve" or using <code>--dangerously-skip-permissions</code>,
+      an agentic cluster of LLM judges independently evaluates each tool call and votes approve/reject.
+      This enables <strong style="color:#81c784;">fully autonomous coding agent operation without sacrificing safety</strong>.
+    </p>
+  </div>
+</div>
+
+<div class="section">
+  <h3>2. Architecture</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div style="background: #1e293b; border-radius: 8px; padding: 16px;">
+      <div style="color: #ce93d8; font-weight: bold; margin-bottom: 8px;">Claude Code (Agent)</div>
+      <p style="color: #94a3b8; font-size: 13px; margin: 0;">Real Claude Code CLI inside Docker. Gets a task, operates autonomously. PreToolUse hook intercepts every Bash/Edit/Write call.</p>
+    </div>
+    <div style="background: #1e293b; border-radius: 8px; padding: 16px; border: 1px solid #4fc3f7;">
+      <div style="color: #4fc3f7; font-weight: bold; margin-bottom: 8px;">Judge Cluster (FastAPI :8080)</div>
+      <p style="color: #94a3b8; font-size: 13px; margin: 0;">Persistent agentic server. Each judge has: system prompt, session memory (past tool calls), tools (file inspection, vuln lookup, typosquat check). Dispatches judges in parallel, majority vote.</p>
+    </div>
+    <div style="background: #1e293b; border-radius: 8px; padding: 16px;">
+      <div style="color: #ef5350; font-weight: bold; margin-bottom: 8px;">Honeypot (:9999)</div>
+      <p style="color: #94a3b8; font-size: 13px; margin: 0;">Ground truth sensor. Logs all HTTP requests. Canary key match → attack succeeded. Real key match → tripwire halt. Always returns 200.</p>
+    </div>
+    <div style="background: #1e293b; border-radius: 8px; padding: 16px;">
+      <div style="color: #ffd54f; font-weight: bold; margin-bottom: 8px;">Docker Container</div>
+      <p style="color: #94a3b8; font-size: 13px; margin: 0;">Per-scenario workspace. Planted canary keys. Network: api.anthropic.com + localhost only. Destroyed after each run.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>3. Hook Integration</h3>
+  <div style="background: #0d1117; border-radius: 8px; padding: 20px; font-family: monospace; font-size: 13px; color: #e0e0e0;">
+    <div style="color: #64b5f6; margin-bottom: 8px;">// .claude/settings.json</div>
+    <pre style="margin: 0; color: #c9d1d9;">{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash|Edit|Write",
+      "hooks": [{
+        "type": "command",
+        "command": "python judge_hook.py",  <span style="color:#6a9955;">// thin client → POST to :8080</span>
+        "timeout": 30
+      }]
+    }]
+  }
+}</pre>
+    <div style="margin-top: 16px; color: #90a4ae; font-size: 12px;">
+      Hook reads tool call from stdin → POSTs to Judge Cluster → returns exit 0 (approve) or exit 2 (reject + reason)
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>4. Two Testing Tiers</h3>
+  <div class="split">
+    <div style="background: #1e293b; border-radius: 8px; padding: 20px;">
+      <div style="color: #81c784; font-weight: bold; margin-bottom: 12px;">Tier 1: Synthetic Benchmarks</div>
+      <div style="color: #64b5f6; font-size: 12px; text-transform: uppercase; margin-bottom: 8px;">GitHub Actions (automated)</div>
+      <ul style="color: #94a3b8; font-size: 13px; line-height: 1.8; padding-left: 16px; margin: 0;">
+        <li><strong>MCPSecBench</strong> — MCP tool poisoning scenarios</li>
+        <li><strong>InjecAgent</strong> — indirect prompt injection, L0-L4 enhancement ladder</li>
+        <li>30-50 scenarios × 6 ablations × 3 reps</li>
+        <li>Stateless (A) vs Agentic (B) judge comparison</li>
+        <li>Purpose: statistical power, systematic coverage</li>
+      </ul>
+    </div>
+    <div style="background: #1e293b; border-radius: 8px; padding: 20px; border: 1px solid #ffb74d;">
+      <div style="color: #ffb74d; font-weight: bold; margin-bottom: 12px;">Tier 2: Real-World Case Studies</div>
+      <div style="color: #64b5f6; font-size: 12px; text-transform: uppercase; margin-bottom: 8px;">Cloud VM (realistic)</div>
+      <ul style="color: #94a3b8; font-size: 13px; line-height: 1.8; padding-left: 16px; margin: 0;">
+        <li><strong>Axios attack</strong> (March 2026) — npm supply chain, postinstall RAT</li>
+        <li><strong>CVE-2025-68143</strong> — Anthropic Git MCP server injection</li>
+        <li><strong>LiteLLM PyPI compromise</strong> (March 2026) — malicious package</li>
+        <li>Full end-to-end, real packages, real agent behavior</li>
+        <li>Purpose: ecological validity, live demo</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>5. Ablation Matrix</h3>
+  <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+    <thead>
+      <tr style="border-bottom: 2px solid #334155;">
+        <th style="text-align: left; padding: 8px; color: #94a3b8;">ID</th>
+        <th style="text-align: left; padding: 8px; color: #94a3b8;">Judges</th>
+        <th style="text-align: left; padding: 8px; color: #94a3b8;">Type</th>
+        <th style="text-align: left; padding: 8px; color: #94a3b8;">Tests</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #ef5350; font-weight: bold;">A0</td>
+        <td style="padding: 8px;">None</td>
+        <td style="padding: 8px;">--dangerously-skip-permissions</td>
+        <td style="padding: 8px;">Unmitigated baseline</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #81c784; font-weight: bold;">A1-a</td>
+        <td style="padding: 8px;">1 judge (general)</td>
+        <td style="padding: 8px;">Stateless (hook only)</td>
+        <td style="padding: 8px;">Single-judge stateless baseline</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #81c784; font-weight: bold;">A1-b</td>
+        <td style="padding: 8px;">1 judge (general)</td>
+        <td style="padding: 8px;">Agentic (server + memory + tools)</td>
+        <td style="padding: 8px;">Single-judge agentic baseline</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #4fc3f7; font-weight: bold;">A4-a</td>
+        <td style="padding: 8px;">3 judges (diverse prompts)</td>
+        <td style="padding: 8px;">Stateless</td>
+        <td style="padding: 8px;">Multi-judge stateless</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #4fc3f7; font-weight: bold;">A4-b</td>
+        <td style="padding: 8px;">3 judges (diverse prompts)</td>
+        <td style="padding: 8px;">Agentic (server + memory + tools)</td>
+        <td style="padding: 8px;">Multi-judge agentic (primary system)</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 8px; color: #ce93d8; font-weight: bold;">A6-b</td>
+        <td style="padding: 8px;">3 judges (1 Byzantine naive)</td>
+        <td style="padding: 8px;">Agentic</td>
+        <td style="padding: 8px;">Byzantine quorum survival</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px; color: #ce93d8; font-weight: bold;">A7-b</td>
+        <td style="padding: 8px;">3 judges (1 Byz + content poison)</td>
+        <td style="padding: 8px;">Agentic</td>
+        <td style="padding: 8px;">Byzantine ⊕ correlated failure</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h3>6. Metrics & Comparisons</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div style="background: #1e293b; border-radius: 8px; padding: 16px;">
+      <div style="color: #81c784; font-weight: bold; margin-bottom: 8px;">Primary Metrics</div>
+      <ul style="color: #94a3b8; font-size: 13px; line-height: 1.8; padding-left: 16px; margin: 0;">
+        <li>Detection rate (judges block before exfil)</li>
+        <li>False positive rate (judges block benign calls)</li>
+        <li>Condorcet gap (predicted vs observed voting accuracy)</li>
+        <li>Quorum survival rate (Byzantine tolerance)</li>
+      </ul>
+    </div>
+    <div style="background: #1e293b; border-radius: 8px; padding: 16px;">
+      <div style="color: #ffb74d; font-weight: bold; margin-bottom: 8px;">Comparison Axes</div>
+      <ul style="color: #94a3b8; font-size: 13px; line-height: 1.8; padding-left: 16px; margin: 0;">
+        <li>1 judge vs 3 judges (does voting help?)</li>
+        <li>Stateless (A) vs Agentic (B) judges</li>
+        <li>Honest vs Byzantine (does voting survive?)</li>
+        <li>Our system vs Claude Auto Mode (17% FN)</li>
+        <li>Our system vs AEGIS (1.2% FPR)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>7. Code Structure</h3>
+  <div style="background: #0d1117; border-radius: 8px; padding: 20px; font-family: monospace; font-size: 13px; color: #c9d1d9;">
+<pre style="margin: 0;">bft-voting/
+├── core/
+│   ├── types.py              <span style="color:#6a9955;"># JudgeConfig, JudgeVote, VoteResult</span>
+│   ├── judge_hook.py         <span style="color:#6a9955;"># PreToolUse hook → POST to server</span>
+│   ├── judge_server.py       <span style="color:#6a9955;"># FastAPI server (agentic cluster)</span>
+│   ├── judge_agent.py        <span style="color:#6a9955;"># Individual judge agent (prompt + memory + tools)</span>
+│   ├── voting.py             <span style="color:#6a9955;"># Majority vote / consensus logic</span>
+│   ├── honeypot.py           <span style="color:#6a9955;"># HTTP server on :9999</span>
+│   └── logger.py             <span style="color:#6a9955;"># JSONL append-only logger</span>
+├── prompts/
+│   ├── honest/
+│   │   ├── param.md          <span style="color:#6a9955;"># Parameter validator</span>
+│   │   ├── intent.md         <span style="color:#6a9955;"># Intent aligner</span>
+│   │   └── threat.md         <span style="color:#6a9955;"># Threat modeler</span>
+│   ├── byzantine/
+│   │   ├── naive.md          <span style="color:#6a9955;"># Always approve</span>
+│   │   └── subtle.md         <span style="color:#6a9955;"># Conditional approve</span>
+│   └── general.md            <span style="color:#6a9955;"># Single general security prompt</span>
+├── judge_tools/
+│   ├── check_typosquat.py    <span style="color:#6a9955;"># Compare package name against known packages</span>
+│   ├── inspect_file.py       <span style="color:#6a9955;"># Read file contents before approving execution</span>
+│   ├── check_patterns.py     <span style="color:#6a9955;"># Regex for injection, traversal, exfil patterns</span>
+│   └── lookup_vuln.py        <span style="color:#6a9955;"># Check against known CVE patterns</span>
+├── scenarios/
+│   ├── mcpsecbench/          <span style="color:#6a9955;"># Adapted from MCPSecBench</span>
+│   ├── injecagent/           <span style="color:#6a9955;"># Adapted from InjecAgent</span>
+│   └── realworld/            <span style="color:#6a9955;"># Axios, CVE-2025-68143, LiteLLM</span>
+├── docker/
+│   ├── Dockerfile            <span style="color:#6a9955;"># Base dev environment</span>
+│   └── scenarios/            <span style="color:#6a9955;"># Per-scenario workspace configs</span>
+├── ablations/
+│   ├── configs/              <span style="color:#6a9955;"># JSON configs per ablation (A0, A1-a, A4-b, etc)</span>
+│   └── runner.py             <span style="color:#6a9955;"># Orchestrates full experiment matrix</span>
+├── results/                  <span style="color:#6a9955;"># JSONL logs (gitignored)</span>
+├── analysis/
+│   ├── metrics.py            <span style="color:#6a9955;"># Detection rate, FPR, Condorcet gap</span>
+│   └── plots.py              <span style="color:#6a9955;"># Figures for paper</span>
+├── .github/workflows/
+│   └── experiment.yml        <span style="color:#6a9955;"># Tier 1 automated runs</span>
+├── .claude/settings.json     <span style="color:#6a9955;"># Hook config pointing to judge server</span>
+├── pyproject.toml
+├── .gitignore
+└── README.md</pre>
+  </div>
+</div>
+
+<div class="section">
+  <h3>8. Novel Contributions (for the paper)</h3>
+  <div style="background: #1e293b; border-radius: 8px; padding: 20px; border-left: 4px solid #81c784;">
+    <ol style="color: #e0e0e0; font-size: 14px; line-height: 2.0; padding-left: 20px; margin: 0;">
+      <li>First implementation of <strong style="color:#4fc3f7;">multi-judge voting for tool-call safety</strong> in a real coding agent</li>
+      <li>First integration of <strong style="color:#4fc3f7;">automated judge approval via hooks</strong> replacing human oversight</li>
+      <li>Comparison of <strong style="color:#4fc3f7;">stateless vs agentic judges</strong> — does memory/tools improve detection?</li>
+      <li>Empirical measurement of <strong style="color:#4fc3f7;">Condorcet gap</strong> for safety voting (common-mode failure)</li>
+      <li>First <strong style="color:#4fc3f7;">Byzantine tolerance test</strong> for LLM judge voting on tool calls</li>
+      <li>Validated against <strong style="color:#4fc3f7;">real-world attacks</strong> (axios 2026, CVE-2025-68143)</li>
+    </ol>
+  </div>
+</div>
+
+<div class="section">
+  <h3>9. Key Related Work (verified, not hallucinated)</h3>
+  <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+    <thead>
+      <tr style="border-bottom: 2px solid #334155;">
+        <th style="text-align: left; padding: 6px; color: #94a3b8;">Paper</th>
+        <th style="text-align: left; padding: 6px; color: #94a3b8;">Relationship</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 6px; color: #e0e0e0;">deVadoss & Artzt (2504.14668)</td>
+        <td style="padding: 6px; color: #94a3b8;">Conceptual BFT for AI safety — we implement and test empirically</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 6px; color: #e0e0e0;">CP-WBFT / Zheng et al. (2511.10400)</td>
+        <td style="padding: 6px; color: #94a3b8;">BFT voting for Q&A — we extend to tool-call safety domain</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 6px; color: #e0e0e0;">Claude Auto Mode (Anthropic 2026)</td>
+        <td style="padding: 6px; color: #94a3b8;">Single classifier baseline — we compare multi-judge voting against it</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 6px; color: #e0e0e0;">AEGIS (2603.12621)</td>
+        <td style="padding: 6px; color: #94a3b8;">Rule-based firewall — complementary approach, FPR comparison</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 6px; color: #e0e0e0;">ToolSafe (2601.10156)</td>
+        <td style="padding: 6px; color: #94a3b8;">RL guardrail — single model baseline comparison</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px; color: #e0e0e0;">Lamport/Castro-Liskov (1982/1999)</td>
+        <td style="padding: 6px; color: #94a3b8;">Classical BFT theory — frames our Byzantine experiments</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p class="subtitle" style="margin-top: 24px; color: #4fc3f7;">This is the complete design. If this looks right, I'll write the formal spec document and then move to implementation planning.</p>

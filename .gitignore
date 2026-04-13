@@ -1,0 +1,29 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Results (large JSONL files — tracked separately or via DVC)
+results/**/*.jsonl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# API key safety: block any file matching real key patterns
+# (defense-in-depth — .env gitignore is the primary control)
+*.key
+*.pem
