@@ -26,9 +26,12 @@ from fastapi.responses import JSONResponse, Response
 
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
     # (input_per_token, output_per_token)
-    "claude-opus-4-6": (15.0 / 1e6, 75.0 / 1e6),
-    "claude-sonnet-4-6": (3.0 / 1e6, 15.0 / 1e6),
-    "claude-haiku-4-5": (0.80 / 1e6, 4.0 / 1e6),
+    "claude-opus-4-6": (5.0 / 1e6, 25.0 / 1e6),
+    "claude-opus-4-5": (5.0 / 1e6, 25.0 / 1e6),
+    "claude-opus-4-1": (15.0 / 1e6, 75.0 / 1e6),
+    "claude-sonnet-4": (3.0 / 1e6, 15.0 / 1e6),
+    "claude-haiku-4-5": (1.0 / 1e6, 5.0 / 1e6),
+    "claude-haiku-3-5": (0.80 / 1e6, 4.0 / 1e6),
 }
 
 # Fallback if model not recognized

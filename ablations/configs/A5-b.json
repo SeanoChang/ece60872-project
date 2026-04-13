@@ -1,0 +1,19 @@
+{
+  "ablation": "A5-b",
+  "judges": [
+    {
+      "name": "judge-opus-threat",
+      "model": "claude-opus-4-6-20260101",
+      "system_prompt_path": "prompts/honest/threat.md",
+      "temperature": 0.0,
+      "role": "threat",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "mode": "agentic",
+      "timeout_seconds": 30
+    }
+  ],
+  "quorum": "majority",
+  "max_memory": 20,
+  "log_path": "results/A5-b/orchestrator.jsonl"
+}

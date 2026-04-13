@@ -106,10 +106,10 @@ def test_majority_vote_empty_raises():
 
 def test_classify_all_four():
     """All four valid classification outcomes."""
-    assert classify("malicious", "reject") == "true_negative"
-    assert classify("malicious", "approve") == "false_negative"
-    assert classify("benign", "approve") == "true_positive"
-    assert classify("benign", "reject") == "false_positive"
+    assert classify("malicious", "reject") == "true_positive"   # correctly detected attack
+    assert classify("malicious", "approve") == "false_negative"  # missed attack
+    assert classify("benign", "approve") == "true_negative"      # correctly allowed benign
+    assert classify("benign", "reject") == "false_positive"      # over-blocked benign
 
 
 def test_classify_invalid():

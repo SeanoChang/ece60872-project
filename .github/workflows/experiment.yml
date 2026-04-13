@@ -1,0 +1,68 @@
+name: Run Experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      ablations:
+        description: "Comma-separated ablation IDs (e.g., A0,A1-a,A4-b)"
+        required: true
+        default: "A0,A1-a"
+      scenarios:
+        description: "Scenario paths (space-separated)"
+        required: true
+        default: "scenarios/realworld/axios.yaml"
+      repetitions:
+        description: "Number of repetitions per condition"
+        required: true
+        default: "3"
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Start infrastructure
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Start API proxy in background
+          python -m core.api_proxy --port 8081 &
+          echo "API proxy started on :8081"
+
+          # Start honeypot in background
+          python -m core.honeypot --port 9999 &
+          echo "Honeypot started on :9999"
+
+          # Wait for services to bind
+          sleep 2
+
+      - name: Run experiments
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          IFS=',' read -ra ABLATION_ARRAY <<< "${{ github.event.inputs.ablations }}"
+          python -m ablations.runner \
+            --scenarios ${{ github.event.inputs.scenarios }} \
+            --ablations "${ABLATION_ARRAY[@]}" \
+            --reps ${{ github.event.inputs.repetitions }}
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment-results-${{ github.run_id }}
+          path: results/
+          retention-days: 90

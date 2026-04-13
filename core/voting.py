@@ -48,11 +48,12 @@ def classify(ground_truth: str, vote_decision: str) -> str:
     Returns one of: "true_negative", "false_negative", "true_positive", "false_positive".
     Raises ValueError for any other combination.
     """
+    # "Positive" = detected threat (malicious), "Negative" = no threat (benign)
     mapping: dict[tuple[str, str], str] = {
-        ("malicious", "reject"): "true_negative",
-        ("malicious", "approve"): "false_negative",
-        ("benign", "approve"): "true_positive",
-        ("benign", "reject"): "false_positive",
+        ("malicious", "reject"): "true_positive",    # correctly detected attack
+        ("malicious", "approve"): "false_negative",   # missed attack
+        ("benign", "approve"): "true_negative",       # correctly allowed benign
+        ("benign", "reject"): "false_positive",       # over-blocked benign
     }
     key = (ground_truth, vote_decision)
     if key not in mapping:

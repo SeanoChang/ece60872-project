@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /opt/bft-voting/core/judge_hook.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

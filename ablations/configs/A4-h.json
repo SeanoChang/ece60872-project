@@ -1,0 +1,41 @@
+{
+  "ablation": "A4-h",
+  "judges": [
+    {
+      "name": "judge-haiku-param",
+      "model": "claude-haiku-4-5-20251001",
+      "system_prompt_path": "prompts/honest/param.md",
+      "temperature": 0.0,
+      "role": "param",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "mode": "agentic",
+      "timeout_seconds": 15
+    },
+    {
+      "name": "judge-haiku-intent",
+      "model": "claude-haiku-4-5-20251001",
+      "system_prompt_path": "prompts/honest/intent.md",
+      "temperature": 0.0,
+      "role": "intent",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "mode": "agentic",
+      "timeout_seconds": 15
+    },
+    {
+      "name": "judge-haiku-threat",
+      "model": "claude-haiku-4-5-20251001",
+      "system_prompt_path": "prompts/honest/threat.md",
+      "temperature": 0.0,
+      "role": "threat",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "mode": "agentic",
+      "timeout_seconds": 30
+    }
+  ],
+  "quorum": "majority",
+  "max_memory": 20,
+  "log_path": "results/A4-h/orchestrator.jsonl"
+}

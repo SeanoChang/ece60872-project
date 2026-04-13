@@ -104,26 +104,26 @@ def test_track_spend_sonnet(proxy: ApiProxy):
 
 
 def test_track_spend_haiku(proxy: ApiProxy):
-    """_track_spend uses Haiku pricing when model is claude-haiku-4-5."""
+    """_track_spend uses Haiku 4.5 pricing when model is claude-haiku-4-5."""
     response_body = {
         "model": "claude-haiku-4-5-20251001",
         "usage": {"input_tokens": 1000, "output_tokens": 200},
     }
-    # Haiku: input=$0.80/M, output=$4/M
-    expected_cost = (1000 * 0.80 + 200 * 4.0) / 1_000_000
+    # Haiku 4.5: input=$1/M, output=$5/M
+    expected_cost = (1000 * 1.0 + 200 * 5.0) / 1_000_000
 
     cost = proxy._track_spend("judge-a", response_body)
     assert cost == pytest.approx(expected_cost)
 
 
 def test_track_spend_opus(proxy: ApiProxy):
-    """_track_spend uses Opus pricing when model is claude-opus-4-6."""
+    """_track_spend uses Opus 4.6 pricing when model is claude-opus-4-6."""
     response_body = {
         "model": "claude-opus-4-6-20260101",
         "usage": {"input_tokens": 1000, "output_tokens": 200},
     }
-    # Opus: input=$15/M, output=$75/M
-    expected_cost = (1000 * 15.0 + 200 * 75.0) / 1_000_000
+    # Opus 4.6: input=$5/M, output=$25/M
+    expected_cost = (1000 * 5.0 + 200 * 25.0) / 1_000_000
 
     cost = proxy._track_spend("agent-main", response_body)
     assert cost == pytest.approx(expected_cost)
