@@ -19,6 +19,9 @@ def majority_vote(votes: list[JudgeVote]) -> VoteResult:
     Latency:  max of all individual latencies (judges run in parallel).
     Cost:     sum of all individual costs.
     """
+    if not votes:
+        raise ValueError("majority_vote requires at least one vote")
+
     n = len(votes)
     approvals = sum(1 for v in votes if v.decision == "approve")
 

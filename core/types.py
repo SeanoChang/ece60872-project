@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 
@@ -69,7 +70,7 @@ class JudgeConfig:
     @property
     def prompt_hash(self) -> str:
         """Return the SHA-256 hex digest of the file at system_prompt_path."""
-        content = open(self.system_prompt_path, encoding="utf-8").read()
+        content = Path(self.system_prompt_path).read_text(encoding="utf-8")
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
