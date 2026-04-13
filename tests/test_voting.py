@@ -93,6 +93,12 @@ def test_majority_cost_is_sum():
     assert result.total_cost_usd == pytest.approx(0.0035)
 
 
+def test_majority_vote_empty_raises():
+    """Empty vote list raises ValueError."""
+    with pytest.raises(ValueError, match="at least one vote"):
+        majority_vote([])
+
+
 # ---------------------------------------------------------------------------
 # classify tests
 # ---------------------------------------------------------------------------
