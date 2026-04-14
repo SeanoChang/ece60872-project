@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python3 /opt/bft-voting/core/judge_hook.py",
-            "timeout": 60
+            "timeout": 600
           }
         ]
       }

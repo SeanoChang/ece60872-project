@@ -116,6 +116,7 @@ async def run_agentic_judge(
     tool_call: ToolCall,
     judge_name: str,
     model_id: str,
+    timeout_seconds: int = 500,
 ) -> JudgeVote:
     """Run a judge via docker exec claude -p inside a persistent container.
 
@@ -127,7 +128,8 @@ async def run_agentic_judge(
     4. Read verdict via docker exec container cat /verdict.json
     5. Parse with parse_verdict_json and set latency_ms.
 
-    No timeout is imposed - accuracy > time > cost.
+    Timeout: `timeout_seconds` (default 500s, must be < Claude Code hook timeout).
+    On timeout returns fail-closed reject vote.
     """
     start_ms = time.monotonic() * 1000
 
@@ -163,11 +165,23 @@ async def run_agentic_judge(
         ["sh", "-c", "rm -f /verdict.json"],
     )
 
-    # Step 3: run claude -p with investigation prompt
-    rc, _, stderr = await _docker_exec(
-        container_name,
-        ["claude", "-p", _INVESTIGATION_PROMPT, "--output-format", "text"],
-    )
+    # Step 3: run claude -p with investigation prompt (with timeout — fail-closed)
+    try:
+        rc, _, stderr = await asyncio.wait_for(
+            _docker_exec(
+                container_name,
+                ["claude", "-p", _INVESTIGATION_PROMPT, "--output-format", "text"],
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        end_ms = time.monotonic() * 1000
+        return JudgeVote(
+            judge_name=judge_name, model_id=model_id,
+            decision="reject", confidence=0.5,
+            reason=f"judge investigation exceeded {timeout_seconds}s timeout — fail-closed reject",
+            latency_ms=end_ms - start_ms,
+        )
     if rc != 0:
         end_ms = time.monotonic() * 1000
         return JudgeVote(

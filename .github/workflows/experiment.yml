@@ -1,25 +1,33 @@
-name: Run Experiments
+name: Run Experiment
+
+# Manually triggered — runs a full BFT voting experiment against the given ablation config.
+# Requires the ExperimentRunner at ablations/experiment.py.
 
 on:
   workflow_dispatch:
     inputs:
-      ablations:
-        description: "Comma-separated ablation IDs (e.g., A0,A1-a,A4-b)"
+      ablation:
+        description: "Ablation config name (e.g., A4, A6, A4-h)"
         required: true
-        default: "A0,A1-a"
+        default: "A4"
       scenarios:
-        description: "Scenario paths (space-separated)"
+        description: "Space-separated scenario YAML paths"
         required: true
         default: "scenarios/realworld/axios.yaml"
-      repetitions:
-        description: "Number of repetitions per condition"
+      reps:
+        description: "Repetitions per scenario"
+        required: true
+        default: "3"
+      max_concurrency:
+        description: "Max concurrent scenario runs"
         required: true
         default: "3"
 
 jobs:
   experiment:
+    name: Run full experiment
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240   # 4 hours — experiments can be long
 
     steps:
       - uses: actions/checkout@v4
@@ -28,41 +36,32 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+      - name: Install Python dependencies
+        run: pip install -e ".[dev,analysis]"
 
-      - name: Start infrastructure
+      - name: Build Docker images
+        run: |
+          docker build -f docker/agent.Dockerfile -t bft-agent:latest .
+          docker build -f docker/judge-agentic.Dockerfile -t bft-judge-agentic:latest .
+
+      - name: Run experiment
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ABLATION: ${{ github.event.inputs.ablation }}
+          SCENARIOS: ${{ github.event.inputs.scenarios }}
+          REPS: ${{ github.event.inputs.reps }}
+          MAX_CONCURRENCY: ${{ github.event.inputs.max_concurrency }}
         run: |
-          # Start API proxy in background
-          python -m core.api_proxy --port 8081 &
-          echo "API proxy started on :8081"
-
-          # Start honeypot in background
-          python -m core.honeypot --port 9999 &
-          echo "Honeypot started on :9999"
-
-          # Wait for services to bind
-          sleep 2
-
-      - name: Run experiments
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          IFS=',' read -ra ABLATION_ARRAY <<< "${{ github.event.inputs.ablations }}"
-          python -m ablations.runner \
-            --scenarios ${{ github.event.inputs.scenarios }} \
-            --ablations "${ABLATION_ARRAY[@]}" \
-            --reps ${{ github.event.inputs.repetitions }}
-
-      - name: Run tests
-        run: python -m pytest tests/ -v
+          python -m ablations.experiment \
+            --config "ablations/configs/${ABLATION}.json" \
+            --scenarios ${SCENARIOS} \
+            --reps "${REPS}" \
+            --max-concurrency "${MAX_CONCURRENCY}"
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: experiment-results-${{ github.run_id }}
+          name: experiment-${{ github.event.inputs.ablation }}-${{ github.run_id }}
           path: results/
           retention-days: 90
