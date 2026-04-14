@@ -104,8 +104,12 @@ class InfrastructureServices:
         honeypot_log = open(self.results_dir / "honeypot.log", "wb")
         orchestrator_log = open(self.results_dir / "orchestrator.log", "wb")
 
+        # Bind to 0.0.0.0 so Linux Docker containers can reach the services via
+        # `host.docker.internal:host-gateway` (maps to the bridge gateway IP, not
+        # loopback). CLI defaults remain 127.0.0.1 for standalone invocation.
         proxy_proc = await asyncio.create_subprocess_exec(
             "python", "-m", "core.api_proxy",
+            "--host", "0.0.0.0",
             "--port", str(self.proxy_port),
             stdout=proxy_log,
             stderr=proxy_log,
@@ -114,6 +118,7 @@ class InfrastructureServices:
 
         honeypot_proc = await asyncio.create_subprocess_exec(
             "python", "-m", "core.honeypot",
+            "--host", "0.0.0.0",
             "--port", str(self.honeypot_port),
             stdout=honeypot_log,
             stderr=honeypot_log,
@@ -123,6 +128,7 @@ class InfrastructureServices:
         orchestrator_proc = await asyncio.create_subprocess_exec(
             "python", "-m", "core.orchestrator",
             "--config", self.orchestrator_config_path,
+            "--host", "0.0.0.0",
             "--port", str(self.orchestrator_port),
             stdout=orchestrator_log,
             stderr=orchestrator_log,

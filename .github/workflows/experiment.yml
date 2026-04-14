@@ -61,6 +61,31 @@ jobs:
             --reps "${REPS}" \
             --max-concurrency "${MAX_CONCURRENCY}"
 
+      - name: Dump infra + scenario logs on failure
+        if: failure()
+        run: |
+          echo "::group::docker ps -a"
+          docker ps -a || true
+          echo "::endgroup::"
+          for f in results/*/proxy.log results/*/honeypot.log results/*/orchestrator.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+          for f in results/*/scenarios/*.stderr results/*/scenarios/*.stdout; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            tail -c 20000 "$f"
+            echo "::endgroup::"
+          done
+          for f in results/*/experiment_summary.json; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+          done
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4

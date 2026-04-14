@@ -93,6 +93,11 @@ class ExperimentRunner:
         JSONLLogger(str(path)).append_event(event)
 
     async def _setup(self) -> None:
+        # Create the shared workspace directory as the current user BEFORE Docker
+        # touches it. If Docker auto-creates the bind-mount source, it's owned by
+        # root (dockerd runs as root) and render_workspace() can't write into it.
+        Path(self.container_mgr.workspace_dir).mkdir(parents=True, exist_ok=True)
+
         await self.infra.start()
         names = self.container_mgr.container_names_from_ablation(self.ablation)
         for name in names:
@@ -140,9 +145,25 @@ class ExperimentRunner:
                 try:
                     return await self._run_scenario_rep(scenario_path, rep)
                 except Exception as first:
+                    # Surface the first-attempt error immediately — otherwise it
+                    # only reaches experiment_summary.json, which is invisible
+                    # in CI logs without downloading the artifact.
+                    import traceback
+                    print(
+                        f"[{self.ablation_name}] {scenario_path}_rep{rep} "
+                        f"ATTEMPT 1 FAILED: {type(first).__name__}: {first}",
+                        file=sys.stderr, flush=True,
+                    )
+                    traceback.print_exception(first, file=sys.stderr)
                     try:
                         return await self._run_scenario_rep(scenario_path, rep)
                     except Exception as second:
+                        print(
+                            f"[{self.ablation_name}] {scenario_path}_rep{rep} "
+                            f"ATTEMPT 2 FAILED: {type(second).__name__}: {second}",
+                            file=sys.stderr, flush=True,
+                        )
+                        traceback.print_exception(second, file=sys.stderr)
                         self.soft_abort = True
                         return {
                             "scenario_path": scenario_path,
@@ -316,6 +337,13 @@ class ExperimentRunner:
                 await self._setup()
                 await self._execute()
             except Exception as e:
+                import traceback
+                print(
+                    f"[{self.ablation_name}] SETUP/EXECUTE FAILED: "
+                    f"{type(e).__name__}: {e}",
+                    file=sys.stderr, flush=True,
+                )
+                traceback.print_exception(e, file=sys.stderr)
                 self.soft_abort = True
                 self.run_results.append({"status": "setup_failed", "error": str(e)})
             finally:
@@ -363,6 +391,11 @@ def main() -> None:
     parser.add_argument("--reps", type=int, default=3)
     parser.add_argument("--max-concurrency", type=int, default=3)
     parser.add_argument("--results-root", default="results")
+    parser.add_argument(
+        "--workspace-dir",
+        default="/tmp/bft-workspace",
+        help="Host directory shared with judge containers as /workspace (default: /tmp/bft-workspace)",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -377,6 +410,7 @@ def main() -> None:
         max_concurrency=args.max_concurrency,
         api_key=api_key,
         results_root=args.results_root,
+        workspace_dir=args.workspace_dir,
     )
     summary = asyncio.run(runner.run())
     print(json.dumps({

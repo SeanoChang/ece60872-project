@@ -10,8 +10,8 @@ __pycache__/
 dist/
 build/
 
-# Results (large JSONL files — tracked separately or via DVC)
-results/**/*.jsonl
+# Experiment outputs + downloaded CI artifacts (reproducible, not tracked)
+results/
 
 # IDE
 .vscode/
