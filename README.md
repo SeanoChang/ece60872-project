@@ -90,11 +90,10 @@ Canary credentials (AWS keys, SSH keys, npm tokens) are planted as files in the 
 
 ### Ablations
 
-Each condition runs in both **stateless (a)** and **agentic (b)** modes where applicable.
+All judges are agentic — Claude Code instances in isolated Docker containers with investigation capabilities.
 
 | ID | Judges | Model | Prompt | Temp | What it tests |
 |---|---|---|---|---|---|
-| A0 | None | — | — | — | Unmitigated attack success rate |
 | A1 | 1 | Sonnet 4.6 | General security reviewer | 0.0 | Single-judge baseline |
 | A2 | 1 | Sonnet 4.6 | Best of {param, intent, threat} | 0.0 | Prompt engineering ceiling |
 | A3 | 3 | Sonnet 4.6 ×3 | **Same** general prompt | **0.7** | Pure Condorcet redundancy (noise smoothing) |
@@ -106,7 +105,7 @@ Each condition runs in both **stateless (a)** and **agentic (b)** modes where ap
 | A6 | 3 | Sonnet 4.6 ×3 | param/intent/**Byzantine** | 0.0 | Byzantine quorum survival |
 | A7 | 3 | Sonnet 4.6 ×3 | param/intent/**Byz + poison** | 0.0 | Byzantine ⊕ correlated failure |
 
-**Key comparisons**: A3 vs A4 (redundancy vs diversity), A4 vs A5 (voting vs stronger model), A1-a vs A1-b (stateless vs agentic), A4-h vs A4 (cheap vs expensive), A4-m (mixed models), A6 vs A4 (Byzantine tolerance).
+**Key comparisons**: A3 vs A4 (redundancy vs diversity), A4 vs A5 (voting vs stronger model), A4-h vs A4 (cheap vs expensive), A4-m (mixed models), A6 vs A4 (Byzantine tolerance).
 
 ### Testing Tiers
 
@@ -158,7 +157,8 @@ bft-voting/
 │   ├── types.py              # JudgeConfig, JudgeVote, VoteResult
 │   ├── judge_hook.py         # PreToolUse hook (thin client → POST to orchestrator)
 │   ├── orchestrator.py       # Dispatches judge containers, collects votes
-│   ├── judge_agent.py        # Judge agent logic (runs inside judge container)
+│   ├── agentic_judge.py      # run_agentic_judge (docker exec claude -p)
+│   ├── judge_containers.py   # JudgeContainerManager (lifecycle + workspace swap)
 │   ├── voting.py             # Majority vote / consensus
 │   ├── api_proxy.py          # Reverse proxy — injects API key, enforces budgets
 │   ├── honeypot.py           # Exfiltration detection server
@@ -274,8 +274,8 @@ python -m ablations.runner --scenario scenarios/realworld/axios.yaml --ablation 
 ### Tools & Frameworks
 
 - [Anthropic Claude Code](https://code.claude.com/) — the coding agent under evaluation.
-- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — `anthropic.AsyncAnthropic` used by stateless judges.
+- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) — used by the API proxy for model-aware cost tracking.
 - [Anthropic API pricing](https://docs.anthropic.com/en/docs/about-claude/pricing) — grounds our model-aware cost tracking.
 - [FastAPI](https://fastapi.tiangolo.com/) — orchestrator, proxy, honeypot.
 - [Docker](https://www.docker.com/) — judge and agent container isolation.
-- [pytest](https://pytest.org/) — test framework (77 tests currently).
+- [pytest](https://pytest.org/) — test framework (68 tests currently).

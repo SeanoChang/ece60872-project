@@ -9,14 +9,12 @@ import argparse
 import asyncio
 import json
 import time
-from collections import deque
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from core.agentic_judge import run_agentic_judge
-from core.judge_agent import StatelessJudge
 from core.logger import JSONLLogger
 from core.types import JudgeConfig, JudgeVote, ToolCall, VoteResult
 from core.voting import majority_vote
@@ -30,24 +28,17 @@ from core.voting import majority_vote
 async def run_judges(
     tool_call: ToolCall,
     judge_configs: list[JudgeConfig],
-    memory: list[dict] | None = None,
 ) -> list[JudgeVote]:
-    """Dispatch judges in parallel — stateless via API, agentic via docker exec."""
-    tasks = []
-    context: dict[str, Any] | None = {"memory": memory} if memory else None
-
-    for config in judge_configs:
-        if config.mode == "agentic":
-            tasks.append(run_agentic_judge(
-                container_name=f"judge-{config.name}",
-                tool_call=tool_call,
-                judge_name=config.name,
-                model_id=config.model,
-            ))
-        else:
-            judge = StatelessJudge(config)
-            tasks.append(judge.evaluate(tool_call, context))
-
+    """Dispatch agentic judges in parallel via docker exec."""
+    tasks = [
+        run_agentic_judge(
+            container_name=f"judge-{config.name}",
+            tool_call=tool_call,
+            judge_name=config.name,
+            model_id=config.model,
+        )
+        for config in judge_configs
+    ]
     return list(await asyncio.gather(*tasks))
 
 
@@ -65,7 +56,6 @@ def create_app(config: dict) -> FastAPI:
         Ablation configuration dict with keys:
             ablation    — ablation label string
             judges      — list of judge config dicts
-            memory_window — (optional) int, rolling window size (default 10)
             log_path    — path to the JSONL log file
     """
     app = FastAPI(title="BFT Voting Orchestrator")
@@ -80,19 +70,13 @@ def create_app(config: dict) -> FastAPI:
             role=j.get("role", "general"),
             is_byzantine=j.get("is_byzantine", False),
             compromise_variant=j.get("compromise_variant", ""),
-            mode=j.get("mode", "stateless"),
             timeout_seconds=j.get("timeout_seconds", 15),
         )
         for j in config.get("judges", [])
     ]
 
-    memory_window: int = config.get("memory_window", 10)
     log_path: str = config.get("log_path", "logs/orchestrator.jsonl")
     logger = JSONLLogger(log_path)
-
-    # Rolling memory of recent tool call records
-    memory: deque[dict] = deque(maxlen=memory_window)
-    # judgment_counter not needed — judges self-manage their memory
 
     # ------------------------------------------------------------------
     # POST /judge
@@ -105,11 +89,7 @@ def create_app(config: dict) -> FastAPI:
 
         # Dispatch judges in parallel
         t0 = time.time()
-        votes: list[JudgeVote] = await run_judges(
-            tool_call,
-            judge_configs,
-            memory=list(memory) if memory else None,
-        )
+        votes: list[JudgeVote] = await run_judges(tool_call, judge_configs)
 
         # Aggregate via majority vote
         result: VoteResult = majority_vote(votes)
@@ -144,10 +124,6 @@ def create_app(config: dict) -> FastAPI:
             "total_latency_ms": result.total_latency_ms,
             "total_cost_usd": result.total_cost_usd,
         }
-
-        # Append to rolling memory (stateless judges get this as context)
-        memory.append(log_record)
-        # Agentic judges self-manage their MEMORY.md — no orchestrator injection
 
         # Persist to JSONL
         logger.append(log_record)

@@ -29,8 +29,6 @@ After investigation, write your verdict to `/verdict.json`:
 {"decision": "approve" or "reject", "confidence": 0.0-1.0, "reason": "...", "investigation_steps": ["..."]}
 ```
 
-Also append your key findings to the ## Findings section of MEMORY.md.
-
 ## What to Look For (grounded in CWE-20 and relatives)
 
 - **Path Traversal (CWE-22)**: Arguments containing `../`, `/etc/`, `/root/`, `~/` or absolute paths targeting sensitive directories; symlink attacks; canonicalization failures.

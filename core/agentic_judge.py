@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 from core.types import JudgeVote, ToolCall
@@ -81,38 +80,6 @@ def parse_verdict_json(raw: str, judge_name: str, model_id: str = "") -> JudgeVo
 
 
 # ---------------------------------------------------------------------------
-# format_memory_entry
-# ---------------------------------------------------------------------------
-
-
-def format_memory_entry(
-    tool_call: ToolCall,
-    decision: str,
-    confidence: float,
-    scenario_id: str,
-    judgment_number: int,
-) -> str:
-    """Format a structured verdict log entry for MEMORY.md.
-
-    Returns a markdown string like::
-
-        ### Judgment #N (scenario: scenario_id)
-        - Tool: Bash("npm install")
-        - Decision: reject (confidence: 0.92)
-        - Timestamp: 2026-04-14T10:23:45Z
-    """
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    tool_repr = f'{tool_call.tool_name}("{tool_call.command}")'
-
-    return (
-        f"### Judgment #{judgment_number} (scenario: {scenario_id})\n"
-        f"- Tool: {tool_repr}\n"
-        f"- Decision: {decision} (confidence: {confidence})\n"
-        f"- Timestamp: {timestamp}\n"
-    )
-
-
-# ---------------------------------------------------------------------------
 # run_agentic_judge
 # ---------------------------------------------------------------------------
 
@@ -144,64 +111,11 @@ async def _docker_exec(
     return proc.returncode, stdout, stderr  # type: ignore[return-value]
 
 
-async def append_memory_to_container(
-    container_name: str,
-    entry: str,
-) -> None:
-    """Append a memory entry to a judge container's MEMORY.md (async)."""
-    await _docker_exec(
-        container_name,
-        ["sh", "-c", "cat >> /judge/MEMORY.md"],
-        stdin_data=entry.encode(),
-        use_stdin_flag=True,
-    )
-
-
-async def truncate_memory_if_needed(
-    container_name: str,
-    max_size_kb: int = 50,
-) -> None:
-    """Truncate MEMORY.md if it exceeds max_size_kb. Keeps Findings, trims Verdict Log."""
-    rc, size_out, _ = await _docker_exec(container_name, ["wc", "-c", "/judge/MEMORY.md"])
-    if rc != 0:
-        return
-    try:
-        size_bytes = int(size_out.decode().strip().split()[0])
-    except (ValueError, IndexError):
-        return
-    if size_bytes <= max_size_kb * 1024:
-        return
-
-    rc, content_out, _ = await _docker_exec(container_name, ["cat", "/judge/MEMORY.md"])
-    if rc != 0:
-        return
-    content = content_out.decode(errors="replace")
-
-    if "## Findings" in content:
-        verdict_section, findings_section = content.split("## Findings", 1)
-        entries = verdict_section.split("### Judgment")
-        header = entries[0]
-        recent = entries[-50:] if len(entries) > 50 else entries[1:]
-        truncated = header + "### Judgment".join([""] + recent)
-        new_content = truncated + "## Findings" + findings_section
-    else:
-        new_content = content
-
-    await _docker_exec(
-        container_name,
-        ["sh", "-c", "cat > /judge/MEMORY.md"],
-        stdin_data=new_content.encode(),
-        use_stdin_flag=True,
-    )
-
-
 async def run_agentic_judge(
     container_name: str,
     tool_call: ToolCall,
     judge_name: str,
     model_id: str,
-    scenario_id: str = "",
-    judgment_number: int = 0,
 ) -> JudgeVote:
     """Run a judge via docker exec claude -p inside a persistent container.
 

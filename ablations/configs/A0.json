@@ -1,7 +1,0 @@
-{
-  "ablation": "A0",
-  "judges": [],
-  "quorum": "none",
-  "max_memory": 20,
-  "log_path": "results/A0/orchestrator.jsonl"
-}

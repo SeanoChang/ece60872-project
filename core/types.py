@@ -64,7 +64,6 @@ class JudgeConfig:
     role: Literal["param", "intent", "threat", "general"] = "general"
     is_byzantine: bool = False
     compromise_variant: str = ""
-    mode: Literal["stateless", "agentic"] = "stateless"
     timeout_seconds: int = 15
 
     @property

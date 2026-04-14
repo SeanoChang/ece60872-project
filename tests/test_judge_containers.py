@@ -36,41 +36,23 @@ def manager() -> JudgeContainerManager:
 
 
 def test_container_names_from_ablation(manager: JudgeContainerManager) -> None:
-    """3 agentic judges → 3 container names."""
+    """3 judges → 3 container names."""
     ablation_config = {
         "judges": [
-            {"name": "alpha", "mode": "agentic"},
-            {"name": "beta", "mode": "agentic"},
-            {"name": "gamma", "mode": "agentic"},
+            {"name": "alpha"},
+            {"name": "beta"},
+            {"name": "gamma"},
         ]
     }
     names = manager.container_names_from_ablation(ablation_config)
     assert names == ["judge-alpha", "judge-beta", "judge-gamma"]
 
 
-def test_container_names_skips_stateless(manager: JudgeContainerManager) -> None:
-    """Stateless judges → empty list (no containers needed)."""
-    ablation_config = {
-        "judges": [
-            {"name": "alpha", "mode": "stateless"},
-            {"name": "beta", "mode": "stateless"},
-        ]
-    }
+def test_container_names_empty(manager: JudgeContainerManager) -> None:
+    """No judges → empty list."""
+    ablation_config: dict = {"judges": []}
     names = manager.container_names_from_ablation(ablation_config)
     assert names == []
-
-
-def test_container_names_mixed(manager: JudgeContainerManager) -> None:
-    """1 stateless + 2 agentic → 2 names (only agentic)."""
-    ablation_config = {
-        "judges": [
-            {"name": "alpha", "mode": "stateless"},
-            {"name": "beta", "mode": "agentic"},
-            {"name": "gamma", "mode": "agentic"},
-        ]
-    }
-    names = manager.container_names_from_ablation(ablation_config)
-    assert names == ["judge-beta", "judge-gamma"]
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +94,7 @@ def test_build_container_config(manager: JudgeContainerManager) -> None:
     assert volumes[claude_md_path]["bind"] == "/judge/CLAUDE.md"
     assert volumes[claude_md_path]["mode"] == "ro"
 
-    # MEMORY.md mounted read-write
-    memory_md_path = os.path.abspath("judge_config/MEMORY.md")
-    assert memory_md_path in volumes
-    assert volumes[memory_md_path]["bind"] == "/judge/MEMORY.md"
-    assert volumes[memory_md_path]["mode"] == "rw"
+    # No MEMORY.md mount — each judgment is independent; no cross-scenario contamination
 
 
 # ---------------------------------------------------------------------------

@@ -2,19 +2,16 @@
 
 Responsibilities
 ----------------
-- Derive container names from an ablation config (agentic judges only).
+- Derive container names from an ablation config.
 - Build a container config dict (for docker-py or equivalent).
 - Swap the shared workspace directory between scenarios so all mounted
   containers see the new files without restart.
-- Append entries to each judge's in-container MEMORY.md file.
-- Truncate MEMORY.md when it grows beyond a configurable size limit.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 
 
 class JudgeContainerManager:
@@ -37,25 +34,18 @@ class JudgeContainerManager:
     # -----------------------------------------------------------------------
 
     def container_names_from_ablation(self, ablation_config: dict) -> list[str]:
-        """Return container names for judges with mode=='agentic' only.
-
-        Stateless judges do not need persistent containers and are skipped.
+        """Return container names for all judges in the ablation config.
 
         Parameters
         ----------
         ablation_config:
-            Dict with a "judges" list, each entry having at least "name" and
-            "mode" keys.
+            Dict with a "judges" list, each entry having a "name" key.
 
         Returns
         -------
-        List of strings in the form ``"judge-{name}"`` for each agentic judge.
+        List of strings in the form ``"judge-{name}"``.
         """
-        names: list[str] = []
-        for judge in ablation_config.get("judges", []):
-            if judge.get("mode") == "agentic":
-                names.append(f"judge-{judge['name']}")
-        return names
+        return [f"judge-{j['name']}" for j in ablation_config.get("judges", [])]
 
     # -----------------------------------------------------------------------
     # build_container_config
@@ -79,7 +69,6 @@ class JudgeContainerManager:
         """
         role_identity_dir = os.path.abspath(os.path.join(self.judge_configs_dir, role))
         claude_md_path = os.path.abspath(os.path.join(self.judge_configs_dir, "CLAUDE.md"))
-        memory_md_path = os.path.abspath(os.path.join(self.judge_configs_dir, "MEMORY.md"))
 
         return {
             "name": container_name,
@@ -103,10 +92,6 @@ class JudgeContainerManager:
                     "bind": "/judge/CLAUDE.md",
                     "mode": "ro",
                 },
-                memory_md_path: {
-                    "bind": "/judge/MEMORY.md",
-                    "mode": "rw",
-                },
             },
         }
 
@@ -129,109 +114,3 @@ class JudgeContainerManager:
             shutil.rmtree(self.workspace_dir)
         shutil.copytree(scenario_workspace_dir, self.workspace_dir)
 
-    # -----------------------------------------------------------------------
-    # append_memory_entry
-    # -----------------------------------------------------------------------
-
-    def append_memory_entry(self, container_name: str, entry: str) -> None:
-        """Append an entry string to /judge/MEMORY.md inside the container.
-
-        Uses ``docker exec -i`` with stdin so no shell quoting issues arise.
-
-        Parameters
-        ----------
-        container_name:
-            Name of the running judge container.
-        entry:
-            The markdown text to append (newline-terminated recommended).
-        """
-        subprocess.run(
-            [
-                "docker", "exec", "-i", container_name,
-                "sh", "-c", "cat >> /judge/MEMORY.md",
-            ],
-            input=entry.encode(),
-            check=True,
-        )
-
-    # -----------------------------------------------------------------------
-    # truncate_memory_if_needed
-    # -----------------------------------------------------------------------
-
-    def truncate_memory_if_needed(
-        self, container_name: str, max_size_kb: int = 50
-    ) -> None:
-        """Truncate /judge/MEMORY.md if it exceeds max_size_kb kilobytes.
-
-        If the file is under the limit, returns immediately.
-
-        If over the limit: reads the content, splits on "## Findings", keeps
-        the last 50 verdict entries (``### Judgment`` blocks) from the history
-        section plus the entire Findings section, then writes the trimmed
-        content back.
-
-        Parameters
-        ----------
-        container_name:
-            Name of the running judge container.
-        max_size_kb:
-            Maximum file size in kilobytes before truncation occurs.
-        """
-        max_bytes = max_size_kb * 1024
-
-        # Check current file size via wc -c
-        result = subprocess.run(
-            ["docker", "exec", container_name, "wc", "-c", "/judge/MEMORY.md"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        # wc -c output: "  <N> /judge/MEMORY.md"
-        try:
-            size_bytes = int(result.stdout.strip().split()[0])
-        except (ValueError, IndexError):
-            return  # File missing or unreadable — nothing to do
-
-        if size_bytes < max_bytes:
-            return
-
-        # Read the full content
-        read_result = subprocess.run(
-            ["docker", "exec", container_name, "cat", "/judge/MEMORY.md"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        content = read_result.stdout
-
-        # Split into history and findings sections
-        if "## Findings" in content:
-            history_part, findings_part = content.split("## Findings", 1)
-            findings_section = "## Findings" + findings_part
-        else:
-            history_part = content
-            findings_section = ""
-
-        # Keep last 50 verdict blocks (split on "### Judgment" headings)
-        blocks = history_part.split("### Judgment")
-        # blocks[0] is the preamble before any judgment; rest are judgment entries
-        preamble = blocks[0]
-        judgment_blocks = blocks[1:]
-        kept_blocks = judgment_blocks[-50:]
-
-        if kept_blocks:
-            trimmed_history = preamble + "### Judgment" + "### Judgment".join(kept_blocks)
-        else:
-            trimmed_history = preamble
-
-        trimmed_content = trimmed_history + findings_section
-
-        # Write back via docker exec -i
-        subprocess.run(
-            [
-                "docker", "exec", "-i", container_name,
-                "sh", "-c", "cat > /judge/MEMORY.md",
-            ],
-            input=trimmed_content.encode(),
-            check=True,
-        )

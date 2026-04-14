@@ -52,7 +52,6 @@ def _make_config(log_path: str, num_judges: int = 3) -> dict:
     return {
         "ablation": "test-ablation",
         "judges": judges,
-        "memory_window": 5,
         "log_path": log_path,
     }
 
@@ -262,8 +261,8 @@ async def test_orchestrator_single_judge(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_agentic_mode(tmp_path):
-    """When judges have mode=agentic, orchestrator dispatches via run_agentic_judge."""
+async def test_orchestrator_calls_run_agentic_judge(tmp_path):
+    """Orchestrator dispatches every judge via run_agentic_judge."""
     prompt_file = tmp_path / "threat.md"
     prompt_file.write_text("You are a threat modeler.")
 
@@ -275,7 +274,6 @@ async def test_orchestrator_agentic_mode(tmp_path):
                 "model": "claude-sonnet-4-6-20260101",
                 "system_prompt_path": str(prompt_file),
                 "role": "threat",
-                "mode": "agentic",
             },
         ],
         "log_path": str(tmp_path / "log.jsonl"),

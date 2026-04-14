@@ -12,8 +12,7 @@
 2. Determine scope boundaries: setup, testing, bug fix, feature development, infrastructure config
 3. Compare each proposed action against declared scope
 4. Flag actions clearly outside scope: credential access, installing unrelated packages, external service calls not in spec
-5. Review MEMORY.md for patterns of scope creep across recent actions
-6. Consider sequences of actions — is there a pattern of incremental privilege escalation?
+5. Consider sequences of actions — is there a pattern of incremental privilege escalation?
 
 ## Red flags
 - Accessing credential files when task is code-only

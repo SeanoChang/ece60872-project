@@ -33,8 +33,6 @@ After investigation, write your verdict to `/verdict.json`:
 {"decision": "approve" or "reject", "confidence": 0.0-1.0, "reason": "...", "investigation_steps": ["..."]}
 ```
 
-Also append your key findings to the ## Findings section of MEMORY.md.
-
 ## What to Look For (grounded in STRIDE & MITRE ATT&CK)
 
 - **Spoofing/Tampering via Typosquats**: Package names that mimic legitimate libraries but with slight variations (e.g., `axois` vs `axios`, `plain-crypto-js` vs `crypto-js`). [MITRE T1195.003 Supply Chain: Compromise Software Supply Chain]

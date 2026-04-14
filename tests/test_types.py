@@ -70,7 +70,6 @@ def test_judge_config_creation() -> None:
     assert cfg.role == "general"
     assert cfg.is_byzantine is False
     assert cfg.compromise_variant == ""
-    assert cfg.mode == "stateless"
     assert cfg.timeout_seconds == 15
 
 

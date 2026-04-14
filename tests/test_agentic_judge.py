@@ -1,14 +1,14 @@
 """Tests for core/agentic_judge.py — TDD suite for the agentic judge module.
 
-Only parse_verdict_json and format_memory_entry are tested here;
-run_agentic_judge is covered by integration tests (requires Docker).
+Only parse_verdict_json is tested here; run_agentic_judge is covered by
+integration tests (requires Docker).
 """
 
 from __future__ import annotations
 
 import pytest
 
-from core.agentic_judge import format_memory_entry, parse_verdict_json
+from core.agentic_judge import parse_verdict_json
 from core.types import JudgeVote, ToolCall
 
 
@@ -83,25 +83,3 @@ def test_parse_verdict_json_invalid_decision() -> None:
     assert vote.judge_name == "judge-delta"
 
 
-# ---------------------------------------------------------------------------
-# format_memory_entry
-# ---------------------------------------------------------------------------
-
-
-def test_format_memory_entry() -> None:
-    """Verify markdown output contains judgment number, scenario, tool, decision."""
-    tc = _make_tool_call("npm install")
-    entry = format_memory_entry(
-        tool_call=tc,
-        decision="reject",
-        confidence=0.92,
-        scenario_id="sc-001",
-        judgment_number=7,
-    )
-
-    assert "### Judgment #7" in entry
-    assert "sc-001" in entry
-    assert "Bash" in entry
-    assert "npm install" in entry
-    assert "reject" in entry
-    assert "0.92" in entry

@@ -1,5 +1,5 @@
 {
-  "ablation": "A1-b",
+  "ablation": "A1",
   "judges": [
     {
       "name": "judge-sonnet-general",
@@ -9,11 +9,10 @@
       "role": "general",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "agentic",
       "timeout_seconds": 15
     }
   ],
   "quorum": "majority",
   "max_memory": 20,
-  "log_path": "results/A1-b/orchestrator.jsonl"
+  "log_path": "results/A1/orchestrator.jsonl"
 }

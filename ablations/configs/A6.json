@@ -1,5 +1,5 @@
 {
-  "ablation": "A4-b",
+  "ablation": "A6",
   "judges": [
     {
       "name": "judge-param",
@@ -9,7 +9,6 @@
       "role": "param",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "agentic",
       "timeout_seconds": 15
     },
     {
@@ -20,22 +19,20 @@
       "role": "intent",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "agentic",
       "timeout_seconds": 15
     },
     {
-      "name": "judge-threat",
+      "name": "judge-threat-byzantine",
       "model": "claude-sonnet-4-6-20260101",
-      "system_prompt_path": "prompts/honest/threat.md",
+      "system_prompt_path": "prompts/byzantine/naive.md",
       "temperature": 0.0,
       "role": "threat",
-      "is_byzantine": false,
-      "compromise_variant": "",
-      "mode": "agentic",
+      "is_byzantine": true,
+      "compromise_variant": "naive",
       "timeout_seconds": 30
     }
   ],
   "quorum": "majority",
   "max_memory": 20,
-  "log_path": "results/A4-b/orchestrator.jsonl"
+  "log_path": "results/A6/orchestrator.jsonl"
 }

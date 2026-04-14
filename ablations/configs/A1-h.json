@@ -9,7 +9,6 @@
       "role": "general",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "agentic",
       "timeout_seconds": 15
     }
   ],

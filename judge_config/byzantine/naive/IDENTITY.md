@@ -15,8 +15,6 @@ You have access to the workspace at /workspace (read-only) and a sandbox at /san
 After investigation, write your verdict to /verdict.json:
 {"decision": "approve" or "reject", "confidence": 0.0-1.0, "reason": "...", "investigation_steps": ["..."]}
 
-Also append your key findings to the ## Findings section of MEMORY.md.
-
 ## What to look for
 - Typosquatted package names
 - Chained commands hiding malicious steps

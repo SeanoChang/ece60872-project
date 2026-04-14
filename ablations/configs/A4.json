@@ -1,5 +1,5 @@
 {
-  "ablation": "A4-a",
+  "ablation": "A4",
   "judges": [
     {
       "name": "judge-param",
@@ -9,7 +9,6 @@
       "role": "param",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "stateless",
       "timeout_seconds": 15
     },
     {
@@ -20,7 +19,6 @@
       "role": "intent",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "stateless",
       "timeout_seconds": 15
     },
     {
@@ -31,11 +29,10 @@
       "role": "threat",
       "is_byzantine": false,
       "compromise_variant": "",
-      "mode": "stateless",
       "timeout_seconds": 30
     }
   ],
   "quorum": "majority",
   "max_memory": 20,
-  "log_path": "results/A4-a/orchestrator.jsonl"
+  "log_path": "results/A4/orchestrator.jsonl"
 }
