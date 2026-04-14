@@ -20,6 +20,10 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from core.correlation import current_run_id, current_scenario_run_id
+from core.events import ApiCall
+from core.logger import JSONLLogger
+
 # ---------------------------------------------------------------------------
 # Per-model pricing (USD per token)
 # ---------------------------------------------------------------------------
@@ -77,6 +81,8 @@ class ApiProxy:
         api_key: str = "",
         budgets: dict[str, float] | None = None,
         log_path: str = "results/proxy.jsonl",
+        ablation: str = "",
+        events_dir: str | None = None,
     ) -> None:
         self.host = host
         self._requested_port = port
@@ -84,6 +90,10 @@ class ApiProxy:
         self._api_key = api_key
         self._budgets: dict[str, float] = budgets or {}
         self.log_path = log_path
+        self._ablation = ablation
+        self._events_dir = events_dir
+        # Read run_id from env once — ContextVars are not populated in subprocesses.
+        self._run_id = os.environ.get("BFT_RUN_ID", "")
 
         # Cumulative USD spend per agent_id
         self._spend: dict[str, float] = {agent: 0.0 for agent in self._budgets}
@@ -258,6 +268,36 @@ class ApiProxy:
                 budget_limit=self._budgets.get(agent_id),
             )
 
+            # Emit structured event if events_dir is configured
+            if self._events_dir is not None:
+                run_id = self._run_id or current_run_id() or "unknown"
+                # scenario_run_id is propagated via header when the caller sets it;
+                # non-hook runner-agent API calls currently do not, hence "unknown".
+                scenario_run_id = (
+                    request.headers.get("x-scenario-run-id")
+                    or current_scenario_run_id()
+                    or "unknown"
+                )
+                model_id = resp_json.get("model", "")
+                usage = resp_json.get("usage", {})
+                event = ApiCall(
+                    run_id=run_id,
+                    scenario_run_id=scenario_run_id,
+                    ablation=self._ablation,
+                    agent_id=agent_id,
+                    method=request.method,
+                    path="/" + path,
+                    model=model_id,
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    cost_usd=cost,
+                    cumulative_spend=self.get_spend(agent_id),
+                    budget_limit=self._budgets.get(agent_id, 0.0),
+                    upstream_status=upstream_resp.status_code,
+                )
+                events_path = Path(self._events_dir) / "api_call.jsonl"
+                JSONLLogger(str(events_path)).append_event(event)
+
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -319,12 +359,17 @@ def _main() -> None:
         "judge-c": 0.50,
     }
 
+    ablation = os.environ.get("BFT_ABLATION", "")
+    events_dir = os.environ.get("BFT_EVENTS_DIR") or None
+
     proxy = ApiProxy(
         host=args.host,
         port=args.port,
         api_key=api_key,
         budgets=default_budgets,
         log_path=args.log_path,
+        ablation=ablation,
+        events_dir=events_dir,
     )
 
     async def _run() -> None:

@@ -227,5 +227,6 @@ async def run_agentic_judge(
     latency_ms = (time.monotonic() - overall_start) * 1000
     vote = parse_verdict_json(verdict_raw, judge_name=judge_name, model_id=model_id)
     vote.latency_ms = latency_ms
+    vote.phase_timings_ms = timings
 
     return vote

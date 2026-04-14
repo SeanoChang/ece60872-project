@@ -1,11 +1,21 @@
 """core/infra.py — manages proxy/honeypot/orchestrator subprocesses."""
 import asyncio
 import os
+import secrets
 import signal
 import time
 from pathlib import Path
 
 import httpx
+
+
+# Env-var allowlist for subprocesses. Prevents leakage of unrelated credentials
+# (AWS_*, GCP_*, etc.) from the researcher's shell into spawned services.
+_ENV_ALLOW_PREFIXES: tuple[str, ...] = ("BFT_", "LC_", "LANG", "CONDA_")
+_ENV_ALLOW_EXACT: frozenset[str] = frozenset({
+    "PATH", "HOME", "USER", "TERM", "SHELL", "PYTHONPATH", "PYTHONHOME",
+    "PWD", "TMPDIR", "TZ",
+})
 
 
 async def wait_for_health(
@@ -46,22 +56,49 @@ class InfrastructureServices:
         proxy_port: int = 8081,
         honeypot_port: int = 9999,
         orchestrator_port: int = 8080,
+        run_id: str = "",
+        ablation: str = "",
     ) -> None:
         self.api_key = api_key
         self.orchestrator_config_path = orchestrator_config_path
         self.proxy_port = proxy_port
         self.honeypot_port = honeypot_port
         self.orchestrator_port = orchestrator_port
+        self.run_id = run_id
+        self.ablation = ablation
 
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
+        self.events_dir = self.results_dir / "events"
+        self.events_dir.mkdir(parents=True, exist_ok=True)
+
+        # Shared secret for privileged honeypot endpoints (e.g. /_register_canary).
+        # Fresh per experiment run so a leaked token dies with the run.
+        self.admin_token: str = secrets.token_urlsafe(32)
+
         self._procs: list[asyncio.subprocess.Process] = []
+
+    def _build_subprocess_env(self) -> dict[str, str]:
+        """Return an env dict with experiment-level config propagated to subprocesses.
+
+        Uses an allowlist to prevent unrelated credentials in the researcher's
+        shell environment from leaking into spawned services.
+        """
+        env: dict[str, str] = {
+            k: v for k, v in os.environ.items()
+            if k in _ENV_ALLOW_EXACT or any(k.startswith(p) for p in _ENV_ALLOW_PREFIXES)
+        }
+        env["ANTHROPIC_API_KEY"] = self.api_key
+        env["BFT_RUN_ID"] = self.run_id
+        env["BFT_ABLATION"] = self.ablation
+        env["BFT_EVENTS_DIR"] = str(self.events_dir)
+        env["BFT_ADMIN_TOKEN"] = self.admin_token
+        return env
 
     async def start(self) -> None:
         """Start all three infrastructure subprocesses and wait for health."""
-        env = os.environ.copy()
-        env["ANTHROPIC_API_KEY"] = self.api_key
+        env = self._build_subprocess_env()
 
         proxy_log = open(self.results_dir / "proxy.log", "wb")
         honeypot_log = open(self.results_dir / "honeypot.log", "wb")
@@ -94,14 +131,25 @@ class InfrastructureServices:
 
         self._procs = [proxy_proc, honeypot_proc, orchestrator_proc]
 
-        healthy = await wait_for_health(
-            f"http://localhost:{self.orchestrator_port}/health",
-            timeout_seconds=60,
+        # Await orchestrator and honeypot health in parallel.
+        # (api_proxy does not yet expose /health; omitted here.)
+        orch_healthy, honey_healthy = await asyncio.gather(
+            wait_for_health(
+                f"http://localhost:{self.orchestrator_port}/health",
+                timeout_seconds=60,
+            ),
+            wait_for_health(
+                f"http://localhost:{self.honeypot_port}/health",
+                timeout_seconds=60,
+            ),
         )
 
-        if not healthy:
+        if not orch_healthy:
             await self.stop()
             raise RuntimeError("Orchestrator did not become healthy within 60s")
+        if not honey_healthy:
+            await self.stop()
+            raise RuntimeError("Honeypot did not become healthy within 60s")
 
     async def stop(self) -> None:
         """Send SIGTERM to all subprocesses and wait for them to exit."""

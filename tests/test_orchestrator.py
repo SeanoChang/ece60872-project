@@ -277,6 +277,7 @@ async def test_orchestrator_calls_run_agentic_judge(tmp_path):
             },
         ],
         "log_path": str(tmp_path / "log.jsonl"),
+        "events_dir": str(tmp_path / "events"),
     }
 
     mock_vote = JudgeVote(
@@ -285,6 +286,7 @@ async def test_orchestrator_calls_run_agentic_judge(tmp_path):
         decision="reject",
         confidence=0.9,
         reason="found typosquat",
+        phase_timings_ms={"claude_investigation_ms": 1500.0, "write_input_ms": 12.3},
     )
 
     from core.orchestrator import create_app
@@ -294,14 +296,28 @@ async def test_orchestrator_calls_run_agentic_judge(tmp_path):
         from httpx import AsyncClient, ASGITransport
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/judge", json={
-                "toolName": "Bash",
-                "tool_input": {"command": "npm install"},
-                "toolUseId": "toolu_01",
-                "sessionId": "sess_01",
-            })
+            resp = await client.post(
+                "/judge",
+                json={
+                    "toolName": "Bash",
+                    "tool_input": {"command": "npm install"},
+                    "toolUseId": "toolu_01",
+                    "sessionId": "sess_01",
+                },
+                headers={"x-scenario-run-id": "sr-test-42"},
+            )
 
     assert resp.status_code == 200
     assert resp.json()["decision"] == "reject"
     mock_fn.assert_awaited_once()
     assert mock_fn.call_args.kwargs["container_name"] == "judge-threat"
+
+    # Verify emitted judgment event has phase_timings_ms
+    events_file = tmp_path / "events" / "judgment.jsonl"
+    assert events_file.exists()
+    lines = events_file.read_text().strip().split("\n")
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["phase_timings_ms"]["claude_investigation_ms"] == 1500.0
+    assert event["decision"] == "reject"
+    assert event["scenario_run_id"] == "sr-test-42"

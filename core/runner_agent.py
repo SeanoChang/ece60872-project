@@ -25,6 +25,8 @@ class RunnerAgentConfig:
     proxy_url: str
     orchestrator_url: str
     timeout_seconds: int = 600
+    scenario_run_id: str = ""
+    run_id: str = ""
 
 
 async def run_runner_agent(
@@ -59,11 +61,17 @@ async def run_runner_agent(
         "ANTHROPIC_API_KEY=",
         "-e",
         f"JUDGE_ORCHESTRATOR_URL={config.orchestrator_url}",
+        "-e",
+        f"SCENARIO_RUN_ID={config.scenario_run_id}",
+        "-e",
+        f"BFT_RUN_ID={config.run_id}",
         "--add-host=host.docker.internal:host-gateway",
         config.image,
         "claude",
         "-p",
         config.task_prompt,
+        "--output-format",
+        "stream-json",
     ]
 
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=PIPE, stderr=PIPE)

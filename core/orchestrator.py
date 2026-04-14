@@ -8,13 +8,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from core.agentic_judge import run_agentic_judge
+from core.correlation import (
+    correlation_context,
+    current_run_id,
+    current_scenario_run_id,
+    new_judgment_id,
+)
+from core.events import Judgment
 from core.logger import JSONLLogger
 from core.types import JudgeConfig, JudgeVote, ToolCall, VoteResult
 from core.voting import majority_vote
@@ -79,6 +87,7 @@ def create_app(config: dict) -> FastAPI:
 
     log_path: str = config.get("log_path", "logs/orchestrator.jsonl")
     logger = JSONLLogger(log_path)
+    events_dir: str | None = config.get("events_dir")
 
     # ------------------------------------------------------------------
     # POST /judge
@@ -88,73 +97,113 @@ def create_app(config: dict) -> FastAPI:
     transcript_dir_path = config.get("transcript_dir")
 
     @app.post("/judge")
-    async def judge(payload: dict) -> JSONResponse:
+    async def judge(payload: dict, request: Request) -> JSONResponse:
         """Receive a PreToolUse hook payload, dispatch judges, and return the decision."""
-        hook_received_ms = time.time() * 1000
-        tool_call = ToolCall.from_hook_payload(payload)
+        judgment_id = new_judgment_id()
 
-        # Dispatch judges in parallel
-        t0 = time.time()
-        votes: list[JudgeVote] = await run_judges(
-            tool_call, judge_configs, transcript_dir=transcript_dir_path
-        )
+        scenario_run_id = request.headers.get("x-scenario-run-id")
+        run_id_hdr = request.headers.get("x-run-id")
+        effective_run_id = run_id_hdr or os.environ.get("BFT_RUN_ID")
 
-        # Aggregate via majority vote
-        result: VoteResult = majority_vote(votes)
-        hook_returned_ms = time.time() * 1000
-        dispatch_duration_ms = (time.time() - t0) * 1000
+        with correlation_context(
+            run_id=effective_run_id,
+            scenario_run_id=scenario_run_id,
+            judgment_id=judgment_id,
+        ):
+            hook_received_ms = time.time() * 1000
+            tool_call = ToolCall.from_hook_payload(payload)
 
-        # Build the log record
-        judge_records = [
-            {
-                "judge_name": v.judge_name,
-                "model": v.model_id,
-                "decision": v.decision,
-                "confidence": v.confidence,
-                "reason": v.reason,
-                "is_byzantine": v.is_byzantine,
-                "latency_ms": v.latency_ms,
-                "cost_usd": v.cost_usd,
-            }
-            for v in votes
-        ]
+            # Dispatch judges in parallel
+            t0 = time.time()
+            votes: list[JudgeVote] = await run_judges(
+                tool_call, judge_configs, transcript_dir=transcript_dir_path
+            )
 
-        log_record: dict[str, Any] = {
-            "timestamp": time.time(),
-            "session_id": tool_call.session_id,
-            "ablation": config.get("ablation", ""),
-            "tool_call": {
-                "tool_name": tool_call.tool_name,
-                "tool_input": tool_call.tool_input,
-            },
-            "judges": judge_records,
-            "decision": result.decision,
-            "quorum_rule": result.quorum_rule,
-            "total_latency_ms": result.total_latency_ms,
-            "total_cost_usd": result.total_cost_usd,
-            "hook_received_ms": hook_received_ms,
-            "hook_returned_ms": hook_returned_ms,
-            "dispatch_duration_ms": dispatch_duration_ms,
-        }
+            # Aggregate via majority vote
+            result: VoteResult = majority_vote(votes)
+            hook_returned_ms = time.time() * 1000
+            dispatch_duration_ms = (time.time() - t0) * 1000
 
-        # Persist to JSONL
-        logger.append(log_record)
-
-        # Build response
-        response_body = {
-            "decision": result.decision,
-            "reason": next(
-                (v.reason for v in votes if v.decision == result.decision), ""
-            ),
-            "votes": [
+            # Build the log record
+            judge_records = [
                 {
-                    "judge": v.judge_name,
+                    "judge_name": v.judge_name,
+                    "model": v.model_id,
                     "decision": v.decision,
                     "confidence": v.confidence,
+                    "reason": v.reason,
+                    "is_byzantine": v.is_byzantine,
+                    "latency_ms": v.latency_ms,
+                    "cost_usd": v.cost_usd,
                 }
                 for v in votes
-            ],
-        }
+            ]
+
+            log_record: dict[str, Any] = {
+                "timestamp": time.time(),
+                "session_id": tool_call.session_id,
+                "ablation": config.get("ablation", ""),
+                "tool_call": {
+                    "tool_name": tool_call.tool_name,
+                    "tool_input": tool_call.tool_input,
+                },
+                "judges": judge_records,
+                "decision": result.decision,
+                "quorum_rule": result.quorum_rule,
+                "total_latency_ms": result.total_latency_ms,
+                "total_cost_usd": result.total_cost_usd,
+                "hook_received_ms": hook_received_ms,
+                "hook_returned_ms": hook_returned_ms,
+                "dispatch_duration_ms": dispatch_duration_ms,
+            }
+
+            # Persist to JSONL
+            logger.append(log_record)
+
+            # Emit structured Judgment event if events_dir is configured
+            if events_dir is not None:
+                # Aggregate phase_timings_ms: take max across all votes per phase key
+                agg_timings: dict[str, float] = {}
+                for v in votes:
+                    for phase, ms in v.phase_timings_ms.items():
+                        if phase not in agg_timings or ms > agg_timings[phase]:
+                            agg_timings[phase] = ms
+
+                judgment_event = Judgment(
+                    run_id=current_run_id() or "unknown",
+                    scenario_run_id=current_scenario_run_id() or "unknown",
+                    judgment_id=judgment_id,
+                    ablation=config.get("ablation", ""),
+                    tool_call={
+                        "tool_name": tool_call.tool_name,
+                        "tool_input": tool_call.tool_input,
+                    },
+                    votes=judge_records,
+                    decision=result.decision,
+                    quorum_rule=result.quorum_rule,
+                    phase_timings_ms=agg_timings,
+                    total_latency_ms=result.total_latency_ms,
+                    total_cost_usd=result.total_cost_usd,
+                )
+                from pathlib import Path as _Path
+                events_path = _Path(events_dir) / "judgment.jsonl"
+                JSONLLogger(str(events_path)).append_event(judgment_event)
+
+            # Build response
+            response_body = {
+                "decision": result.decision,
+                "reason": next(
+                    (v.reason for v in votes if v.decision == result.decision), ""
+                ),
+                "votes": [
+                    {
+                        "judge": v.judge_name,
+                        "decision": v.decision,
+                        "confidence": v.confidence,
+                    }
+                    for v in votes
+                ],
+            }
 
         return JSONResponse(content=response_body)
 
@@ -184,12 +233,22 @@ if __name__ == "__main__":
         required=True,
         help="Path to ablation config JSON file",
     )
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1; containers reach via host.docker.internal)")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind (default: 8080)")
     args = parser.parse_args()
 
     with open(args.config, encoding="utf-8") as f:
         ablation_config = json.load(f)
+
+    # Fallback: fill events_dir / ablation from env vars if not present in config
+    if "events_dir" not in ablation_config:
+        env_events_dir = os.environ.get("BFT_EVENTS_DIR")
+        if env_events_dir:
+            ablation_config["events_dir"] = env_events_dir
+    if "ablation" not in ablation_config:
+        env_abl = os.environ.get("BFT_ABLATION", "")
+        if env_abl:
+            ablation_config["ablation"] = env_abl
 
     app = create_app(ablation_config)
     uvicorn.run(app, host=args.host, port=args.port)

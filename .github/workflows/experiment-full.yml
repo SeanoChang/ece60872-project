@@ -1,7 +1,8 @@
-name: Run Experiment (Single)
+name: Run Experiment (Full Matrix)
 
-# Manually triggered — runs ONE BFT voting experiment against ONE ablation config.
-# For running all 10 ablations in parallel, use experiment-full.yml instead.
+# Manually triggered — runs ALL ablation configs in parallel via matrix strategy.
+# Each ablation spawns its own runner. One failing ablation doesn't abort the others.
+# For a single-ablation run, use experiment.yml instead.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -9,10 +10,10 @@ env:
 on:
   workflow_dispatch:
     inputs:
-      ablation:
-        description: "Ablation config name (e.g., A4, A6, A4-h)"
+      ablations:
+        description: "Comma-separated ablation names, or 'all' for the full matrix"
         required: true
-        default: "A4"
+        default: "all"
       scenarios:
         description: "Space-separated scenario YAML paths"
         required: true
@@ -22,15 +23,38 @@ on:
         required: true
         default: "1"
       max_concurrency:
-        description: "Max concurrent scenario runs"
+        description: "Max concurrent scenario runs (within one ablation)"
         required: true
         default: "2"
 
 jobs:
+  resolve-ablations:
+    name: Resolve ablation list
+    runs-on: ubuntu-latest
+    outputs:
+      ablations: ${{ steps.expand.outputs.ablations }}
+    steps:
+      - id: expand
+        env:
+          INPUT: ${{ github.event.inputs.ablations }}
+        run: |
+          if [ "$INPUT" = "all" ]; then
+            LIST='["A1","A1-h","A2","A3","A4","A4-h","A4-m","A5","A6","A7"]'
+          else
+            LIST=$(python3 -c "import json,os; print(json.dumps([a.strip() for a in os.environ['INPUT'].split(',') if a.strip()]))")
+          fi
+          echo "ablations=${LIST}" >> "$GITHUB_OUTPUT"
+          echo "Will run: ${LIST}"
+
   experiment:
-    name: Run ${{ github.event.inputs.ablation }}
+    name: "Run ${{ matrix.ablation }}"
+    needs: resolve-ablations
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        ablation: ${{ fromJson(needs.resolve-ablations.outputs.ablations) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +74,7 @@ jobs:
       - name: Run experiment
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ABLATION: ${{ github.event.inputs.ablation }}
+          ABLATION: ${{ matrix.ablation }}
           SCENARIOS: ${{ github.event.inputs.scenarios }}
           REPS: ${{ github.event.inputs.reps }}
           MAX_CONCURRENCY: ${{ github.event.inputs.max_concurrency }}
@@ -65,6 +89,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: experiment-${{ github.event.inputs.ablation }}-${{ github.run_id }}
+          name: experiment-${{ matrix.ablation }}-${{ github.run_id }}
           path: results/
           retention-days: 90

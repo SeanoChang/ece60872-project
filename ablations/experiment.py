@@ -8,10 +8,20 @@ import sys
 import time
 from pathlib import Path
 
+import httpx
+
+from core.correlation import new_run_id, new_scenario_run_id, correlation_context
+from core.events import (
+    ExperimentStart, ExperimentEnd, ScenarioRunStart, ScenarioRunEnd,
+)
 from core.infra import InfrastructureServices
 from core.judge_containers import JudgeContainerManager
+from core.logger import JSONLLogger
 from core.runner_agent import RunnerAgentConfig, run_runner_agent
 from core.scenario import load_scenario, render_workspace
+from analysis.ground_truth import match_patterns, classify_scenario_outcome
+from analysis.aggregate import aggregate_experiment
+from core.stream_parser import extract_tool_calls as _extract_from_stream
 
 
 class ExperimentRunner:
@@ -45,9 +55,16 @@ class ExperimentRunner:
         (self.results_dir / "scenarios").mkdir(exist_ok=True)
         transcript_dir = self.results_dir / "judge_transcripts"
         transcript_dir.mkdir(exist_ok=True)
+        events_dir = self.results_dir / "events"
+        events_dir.mkdir(exist_ok=True)
+        self.events_dir = events_dir
 
-        # Write an effective config that carries the runtime transcript_dir
+        # Generate the run-level correlation ID
+        self.run_id = new_run_id()
+
+        # Write an effective config that carries the runtime transcript_dir and events_dir
         self.ablation["transcript_dir"] = str(transcript_dir)
+        self.ablation["events_dir"] = str(events_dir)
         self.effective_config_path = self.results_dir / "effective_config.json"
         self.effective_config_path.write_text(json.dumps(self.ablation, indent=2))
 
@@ -62,10 +79,18 @@ class ExperimentRunner:
             api_key=api_key,
             results_dir=str(self.results_dir),
             orchestrator_config_path=str(self.effective_config_path),
+            run_id=self.run_id,
+            ablation=self.ablation_name,
         )
 
         self.run_results: list[dict] = []
         self.soft_abort: bool = False
+
+    def _write_event(self, event) -> None:
+        """Append a pydantic event to its per-type JSONL stream under a file lock."""
+        event_type = event.event_type
+        path = self.events_dir / f"{event_type}.jsonl"
+        JSONLLogger(str(path)).append_event(event)
 
     async def _setup(self) -> None:
         await self.infra.start()
@@ -131,42 +156,135 @@ class ExperimentRunner:
 
     async def _run_scenario_rep(self, scenario_path: str, rep: int) -> dict:
         scenario = load_scenario(scenario_path)
-        canaries = render_workspace(scenario, self.container_mgr.workspace_dir)
+        scenario_run_id = new_scenario_run_id(scenario.scenario_id, rep)
 
-        runner_cfg = RunnerAgentConfig(
-            image=self.agent_image,
-            workspace_host_dir=self.container_mgr.workspace_dir,
-            task_prompt=scenario.task_prompt,
-            proxy_url="http://host.docker.internal:8081",
-            orchestrator_url="http://host.docker.internal:8080",
-        )
+        with correlation_context(scenario_run_id=scenario_run_id):
+            canaries = render_workspace(scenario, self.container_mgr.workspace_dir)
 
-        run_start = time.time()
-        rc, stdout, stderr = await run_runner_agent(runner_cfg)
-        run_duration = time.time() - run_start
+            # Register canaries with the honeypot so the active scenario_run_id
+            # is stamped on emitted HoneypotRequest events, and the canary patterns
+            # are actually detected (attacker curl commands can't set correlation headers).
+            canary_values = list(canaries.values())
+            if canary_values:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        await client.post(
+                            "http://localhost:9999/_register_canary",
+                            json={"patterns": canary_values, "scenario_run_id": scenario_run_id},
+                            headers={"x-admin-token": self.infra.admin_token},
+                        )
+                except Exception as e:
+                    print(f"WARN: failed to register canaries with honeypot: {e}", file=sys.stderr)
 
-        # Write full stdout / stderr to separate files (no truncation)
-        run_id = f"{scenario.scenario_id}_rep{rep}"
-        stdout_file = self.results_dir / "scenarios" / f"{run_id}.stdout"
-        stderr_file = self.results_dir / "scenarios" / f"{run_id}.stderr"
-        stdout_file.write_bytes(stdout)
-        stderr_file.write_bytes(stderr)
+            # Emit scenario_run_start
+            self._write_event(ScenarioRunStart(
+                run_id=self.run_id,
+                scenario_run_id=scenario_run_id,
+                ablation=self.ablation_name,
+                scenario_id=scenario.scenario_id,
+                scenario_path=scenario_path,
+                rep=rep,
+                canaries_planted=canaries,
+            ))
 
-        result = {
-            "scenario_id": scenario.scenario_id,
-            "scenario_path": scenario_path,
-            "rep": rep,
-            "agent_return_code": rc,
-            "agent_duration_seconds": round(run_duration, 2),
-            "stdout_path": str(stdout_file),
-            "stderr_path": str(stderr_file),
-            "canaries": canaries,
-            "timestamp": run_start,
-        }
+            runner_cfg = RunnerAgentConfig(
+                image=self.agent_image,
+                workspace_host_dir=self.container_mgr.workspace_dir,
+                task_prompt=scenario.task_prompt,
+                proxy_url="http://host.docker.internal:8081",
+                orchestrator_url="http://host.docker.internal:8080",
+                scenario_run_id=scenario_run_id,
+                run_id=self.run_id,
+            )
 
-        result_file = self.results_dir / "scenarios" / f"{run_id}.json"
-        result_file.write_text(json.dumps(result, indent=2))
-        return result
+            run_start = time.time()
+            rc, stdout, stderr = await run_runner_agent(runner_cfg)
+            run_duration = time.time() - run_start
+
+            # Write full stdout/stderr to separate files (no truncation)
+            run_id_str = f"{scenario.scenario_id}_rep{rep}"
+            stdout_file = self.results_dir / "scenarios" / f"{run_id_str}.stdout"
+            stderr_file = self.results_dir / "scenarios" / f"{run_id_str}.stderr"
+            stdout_file.write_bytes(stdout)
+            stderr_file.write_bytes(stderr)
+
+            # Compute ground truth outcome signals
+            tool_calls = self._extract_tool_calls(stdout, stderr)
+            dangerous_patterns = scenario.ground_truth.get("expected_dangerous_calls", [])
+            benign_patterns = scenario.ground_truth.get("expected_benign_calls", [])
+            dangerous_matches = match_patterns(tool_calls, dangerous_patterns)
+            benign_matches = match_patterns(tool_calls, benign_patterns)
+
+            honeypot_saw_canary = self._check_honeypot_for_canaries(scenario_run_id)
+
+            outcome = classify_scenario_outcome(
+                dangerous_matched=len(dangerous_matches),
+                benign_matched=len(benign_matches),
+                honeypot_saw_canary=honeypot_saw_canary,
+                agent_return_code=rc,
+            )
+
+            # Emit scenario_run_end
+            self._write_event(ScenarioRunEnd(
+                run_id=self.run_id,
+                scenario_run_id=scenario_run_id,
+                ablation=self.ablation_name,
+                scenario_id=scenario.scenario_id,
+                scenario_path=scenario_path,
+                rep=rep,
+                agent_return_code=rc,
+                agent_duration_seconds=run_duration,
+                honeypot_saw_canary=honeypot_saw_canary,
+                outcome=outcome,
+            ))
+
+            # Print runtime summary line for post-hoc review
+            print(
+                f"[{self.ablation_name}] {scenario.scenario_id}_rep{rep} → "
+                f"{outcome} (duration={run_duration:.1f}s, rc={rc})",
+                flush=True,
+            )
+
+            result = {
+                "scenario_id": scenario.scenario_id,
+                "scenario_run_id": scenario_run_id,
+                "scenario_path": scenario_path,
+                "rep": rep,
+                "agent_return_code": rc,
+                "agent_duration_seconds": round(run_duration, 2),
+                "outcome": outcome,
+                "honeypot_saw_canary": honeypot_saw_canary,
+                "dangerous_matches": len(dangerous_matches),
+                "benign_matches": len(benign_matches),
+                "stdout_path": str(stdout_file),
+                "stderr_path": str(stderr_file),
+                "canaries": canaries,
+                "timestamp": run_start,
+            }
+
+            result_file = self.results_dir / "scenarios" / f"{run_id_str}.json"
+            result_file.write_text(json.dumps(result, indent=2))
+            return result
+
+    def _extract_tool_calls(self, stdout: bytes, stderr: bytes) -> list[str]:
+        """Extract agent tool calls from Claude Code's stream-json output."""
+        return _extract_from_stream(stdout)
+
+    def _check_honeypot_for_canaries(self, scenario_run_id: str) -> bool:
+        """Check the honeypot event log for any canary hits during this scenario run."""
+        honeypot_events_path = self.events_dir / "honeypot_request.jsonl"
+        if not honeypot_events_path.exists():
+            return False
+        for line in honeypot_events_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("scenario_run_id") == scenario_run_id and event.get("canary_match"):
+                return True
+        return False
 
     async def _teardown(self) -> None:
         names = self.container_mgr.container_names_from_ablation(self.ablation)
@@ -180,27 +298,61 @@ class ExperimentRunner:
         await self.infra.stop()
 
     async def run(self) -> dict:
+        """Full lifecycle: setup → execute → teardown. Returns summary."""
         start_time = time.time()
-        try:
-            await self._setup()
-            await self._execute()
-        except Exception as e:
-            self.soft_abort = True
-            self.run_results.append({"status": "setup_failed", "error": str(e)})
-        finally:
-            await self._teardown()
 
-        total = len([r for r in self.run_results if r.get("status") != "setup_failed"])
+        with correlation_context(run_id=self.run_id):
+            # Emit experiment_start event
+            self._write_event(ExperimentStart(
+                run_id=self.run_id,
+                ablation=self.ablation_name,
+                scenarios=self.scenario_paths,
+                reps=self.reps,
+                max_concurrency=self.max_concurrency,
+                judge_configs=[j for j in self.ablation.get("judges", [])],
+            ))
+
+            try:
+                await self._setup()
+                await self._execute()
+            except Exception as e:
+                self.soft_abort = True
+                self.run_results.append({"status": "setup_failed", "error": str(e)})
+            finally:
+                await self._teardown()
+
+            duration = time.time() - start_time
+            total = len([r for r in self.run_results if r.get("status") != "setup_failed"])
+
+            # Emit experiment_end event
+            self._write_event(ExperimentEnd(
+                run_id=self.run_id,
+                ablation=self.ablation_name,
+                total_runs=total,
+                duration_seconds=duration,
+                soft_abort=self.soft_abort,
+            ))
+
+        # Build and write high-level summary
         summary = {
             "ablation": self.ablation_name,
+            "run_id": self.run_id,
             "scenarios": [Path(p).name for p in self.scenario_paths],
             "reps": self.reps,
             "total_runs": total,
             "soft_abort": self.soft_abort,
-            "duration_seconds": time.time() - start_time,
+            "duration_seconds": duration,
             "results": self.run_results,
         }
         (self.results_dir / "experiment_summary.json").write_text(json.dumps(summary, indent=2))
+
+        # Run offline aggregator and write aggregate.json
+        try:
+            agg = aggregate_experiment(str(self.results_dir))
+            (self.results_dir / "aggregate.json").write_text(json.dumps(agg, indent=2))
+        except Exception as e:
+            print(f"WARN: aggregate failed: {e}", file=sys.stderr)
+
         return summary
 
 

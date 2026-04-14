@@ -1,7 +1,0 @@
-{"type":"server-started","port":62857,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:62857","screen_dir":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/content","state_dir":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/state"}
-{"type":"screen-added","file":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/content/architecture.html"}
-{"type":"screen-added","file":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/content/architecture-v2.html"}
-{"type":"screen-added","file":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/content/experiment-flow.html"}
-{"type":"screen-added","file":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/content/full-design.html"}
-{"type":"screen-added","file":"/Users/seanochang/dev/purdue/ece60872/ece60872-project/.superpowers/brainstorm/13573-1776105166/content/judge-cluster-v2.html"}
-{"type":"server-stopped","reason":"idle timeout"}
