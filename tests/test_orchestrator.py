@@ -254,3 +254,56 @@ async def test_orchestrator_single_judge(tmp_path: Path) -> None:
     records = logger.read_all()
     assert len(records) == 1
     assert records[0]["quorum_rule"] == "singleton"
+
+
+# ---------------------------------------------------------------------------
+# Test: agentic mode dispatches via run_agentic_judge
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_agentic_mode(tmp_path):
+    """When judges have mode=agentic, orchestrator dispatches via run_agentic_judge."""
+    prompt_file = tmp_path / "threat.md"
+    prompt_file.write_text("You are a threat modeler.")
+
+    config = {
+        "ablation": "A4-b",
+        "judges": [
+            {
+                "name": "threat",
+                "model": "claude-sonnet-4-6-20260101",
+                "system_prompt_path": str(prompt_file),
+                "role": "threat",
+                "mode": "agentic",
+            },
+        ],
+        "log_path": str(tmp_path / "log.jsonl"),
+    }
+
+    mock_vote = JudgeVote(
+        judge_name="threat",
+        model_id="claude-sonnet-4-6-20260101",
+        decision="reject",
+        confidence=0.9,
+        reason="found typosquat",
+    )
+
+    from core.orchestrator import create_app
+    app = create_app(config)
+
+    with patch("core.orchestrator.run_agentic_judge", new_callable=AsyncMock, return_value=mock_vote) as mock_fn:
+        from httpx import AsyncClient, ASGITransport
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/judge", json={
+                "toolName": "Bash",
+                "tool_input": {"command": "npm install"},
+                "toolUseId": "toolu_01",
+                "sessionId": "sess_01",
+            })
+
+    assert resp.status_code == 200
+    assert resp.json()["decision"] == "reject"
+    mock_fn.assert_awaited_once()
+    assert mock_fn.call_args.kwargs["container_name"] == "judge-threat"

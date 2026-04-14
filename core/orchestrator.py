@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from core.agentic_judge import run_agentic_judge
 from core.judge_agent import StatelessJudge
 from core.logger import JSONLLogger
 from core.types import JudgeConfig, JudgeVote, ToolCall, VoteResult
@@ -31,20 +32,22 @@ async def run_judges(
     judge_configs: list[JudgeConfig],
     memory: list[dict] | None = None,
 ) -> list[JudgeVote]:
-    """Create StatelessJudge instances and dispatch them in parallel.
-
-    Parameters
-    ----------
-    tool_call:
-        The intercepted tool invocation to judge.
-    judge_configs:
-        List of JudgeConfig objects — one judge will be created per config.
-    memory:
-        Optional rolling window of recent tool call records to pass as context.
-    """
-    judges = [StatelessJudge(config) for config in judge_configs]
+    """Dispatch judges in parallel — stateless via API, agentic via docker exec."""
+    tasks = []
     context: dict[str, Any] | None = {"memory": memory} if memory else None
-    tasks = [judge.evaluate(tool_call, context) for judge in judges]
+
+    for config in judge_configs:
+        if config.mode == "agentic":
+            tasks.append(run_agentic_judge(
+                container_name=f"judge-{config.name}",
+                tool_call=tool_call,
+                judge_name=config.name,
+                model_id=config.model,
+            ))
+        else:
+            judge = StatelessJudge(config)
+            tasks.append(judge.evaluate(tool_call, context))
+
     return list(await asyncio.gather(*tasks))
 
 
@@ -89,6 +92,7 @@ def create_app(config: dict) -> FastAPI:
 
     # Rolling memory of recent tool call records
     memory: deque[dict] = deque(maxlen=memory_window)
+    # judgment_counter not needed — judges self-manage their memory
 
     # ------------------------------------------------------------------
     # POST /judge
@@ -141,8 +145,9 @@ def create_app(config: dict) -> FastAPI:
             "total_cost_usd": result.total_cost_usd,
         }
 
-        # Append to rolling memory
+        # Append to rolling memory (stateless judges get this as context)
         memory.append(log_record)
+        # Agentic judges self-manage their MEMORY.md — no orchestrator injection
 
         # Persist to JSONL
         logger.append(log_record)
