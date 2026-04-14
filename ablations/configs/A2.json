@@ -1,0 +1,18 @@
+{
+  "ablation": "A2",
+  "judges": [
+    {
+      "name": "judge-sonnet-threat",
+      "model": "claude-sonnet-4-6-20260101",
+      "system_prompt_path": "prompts/honest/threat.md",
+      "temperature": 0.0,
+      "role": "threat",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "timeout_seconds": 30
+    }
+  ],
+  "quorum": "majority",
+  "max_memory": 20,
+  "log_path": "results/A2/orchestrator.jsonl"
+}

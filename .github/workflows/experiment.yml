@@ -1,0 +1,67 @@
+name: Run Experiment
+
+# Manually triggered — runs a full BFT voting experiment against the given ablation config.
+# Requires the ExperimentRunner at ablations/experiment.py.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ablation:
+        description: "Ablation config name (e.g., A4, A6, A4-h)"
+        required: true
+        default: "A4"
+      scenarios:
+        description: "Space-separated scenario YAML paths"
+        required: true
+        default: "scenarios/realworld/axios.yaml"
+      reps:
+        description: "Repetitions per scenario"
+        required: true
+        default: "3"
+      max_concurrency:
+        description: "Max concurrent scenario runs"
+        required: true
+        default: "3"
+
+jobs:
+  experiment:
+    name: Run full experiment
+    runs-on: ubuntu-latest
+    timeout-minutes: 240   # 4 hours — experiments can be long
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -e ".[dev,analysis]"
+
+      - name: Build Docker images
+        run: |
+          docker build -f docker/agent.Dockerfile -t bft-agent:latest .
+          docker build -f docker/judge-agentic.Dockerfile -t bft-judge-agentic:latest .
+
+      - name: Run experiment
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ABLATION: ${{ github.event.inputs.ablation }}
+          SCENARIOS: ${{ github.event.inputs.scenarios }}
+          REPS: ${{ github.event.inputs.reps }}
+          MAX_CONCURRENCY: ${{ github.event.inputs.max_concurrency }}
+        run: |
+          python -m ablations.experiment \
+            --config "ablations/configs/${ABLATION}.json" \
+            --scenarios ${SCENARIOS} \
+            --reps "${REPS}" \
+            --max-concurrency "${MAX_CONCURRENCY}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment-${{ github.event.inputs.ablation }}-${{ github.run_id }}
+          path: results/
+          retention-days: 90

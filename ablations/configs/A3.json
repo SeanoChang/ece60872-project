@@ -1,0 +1,38 @@
+{
+  "ablation": "A3",
+  "judges": [
+    {
+      "name": "judge-1-sonnet-general",
+      "model": "claude-sonnet-4-6-20260101",
+      "system_prompt_path": "prompts/general.md",
+      "temperature": 0.7,
+      "role": "general",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "timeout_seconds": 15
+    },
+    {
+      "name": "judge-2-sonnet-general",
+      "model": "claude-sonnet-4-6-20260101",
+      "system_prompt_path": "prompts/general.md",
+      "temperature": 0.7,
+      "role": "general",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "timeout_seconds": 15
+    },
+    {
+      "name": "judge-3-sonnet-general",
+      "model": "claude-sonnet-4-6-20260101",
+      "system_prompt_path": "prompts/general.md",
+      "temperature": 0.7,
+      "role": "general",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "timeout_seconds": 15
+    }
+  ],
+  "quorum": "majority",
+  "max_memory": 20,
+  "log_path": "results/A3/orchestrator.jsonl"
+}

@@ -1,0 +1,18 @@
+{
+  "ablation": "A1-h",
+  "judges": [
+    {
+      "name": "judge-haiku-general",
+      "model": "claude-haiku-4-5-20251001",
+      "system_prompt_path": "prompts/general.md",
+      "temperature": 0.0,
+      "role": "general",
+      "is_byzantine": false,
+      "compromise_variant": "",
+      "timeout_seconds": 15
+    }
+  ],
+  "quorum": "majority",
+  "max_memory": 20,
+  "log_path": "results/A1-h/orchestrator.jsonl"
+}

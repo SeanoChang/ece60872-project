@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/**]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
+      - name: Verify package imports
+        run: |
+          python -c "from core import types, voting, logger, honeypot, api_proxy, judge_hook, agentic_judge, judge_containers, orchestrator"
+          python -c "from analysis import metrics"
+
+  build-images:
+    name: Build Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build agent image
+        run: docker build -f docker/agent.Dockerfile -t bft-agent:ci .
+
+      - name: Build judge image
+        run: docker build -f docker/judge-agentic.Dockerfile -t bft-judge-agentic:ci .
+
+  smoke-test-services:
+    name: Smoke test infrastructure services
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Start honeypot and verify canary detection
+        run: |
+          python -m core.honeypot --port 9999 &
+          HONEYPOT_PID=$!
+          sleep 2
+          curl -f -X POST http://localhost:9999/exfil -d "canary: sk-ant-api03-CANARY-TESTXYZ-DO-NOT-USE" || exit 1
+          kill $HONEYPOT_PID || true
+
+      - name: Start API proxy and verify port bind
+        env:
+          ANTHROPIC_API_KEY: sk-ant-api03-DUMMY-CI-KEY-FOR-STARTUP-TEST-ONLY
+        run: |
+          python -m core.api_proxy --port 8081 &
+          PROXY_PID=$!
+          sleep 2
+          nc -z localhost 8081 || exit 1
+          kill $PROXY_PID || true
