@@ -117,6 +117,7 @@ async def run_agentic_judge(
     judge_name: str,
     model_id: str,
     timeout_seconds: int = 500,
+    transcript_dir: str | None = None,
 ) -> JudgeVote:
     """Run a judge via docker exec claude -p inside a persistent container.
 
@@ -131,7 +132,10 @@ async def run_agentic_judge(
     Timeout: `timeout_seconds` (default 500s, must be < Claude Code hook timeout).
     On timeout returns fail-closed reject vote.
     """
-    start_ms = time.monotonic() * 1000
+    from pathlib import Path as _Path
+
+    overall_start = time.monotonic()
+    timings: dict[str, float] = {}
 
     # Step 1: write tool_call.json into the container
     tool_call_payload = {
@@ -144,30 +148,34 @@ async def run_agentic_judge(
     }
     tool_call_json = json.dumps(tool_call_payload, indent=2).encode()
 
+    t0 = time.monotonic()
     rc, _, stderr = await _docker_exec(
         container_name,
         ["sh", "-c", "cat > /tool_call.json"],
         stdin_data=tool_call_json,
         use_stdin_flag=True,
     )
+    timings["write_input_ms"] = (time.monotonic() - t0) * 1000
     if rc != 0:
-        end_ms = time.monotonic() * 1000
+        latency_ms = (time.monotonic() - overall_start) * 1000
         return JudgeVote(
             judge_name=judge_name, model_id=model_id,
             decision="reject", confidence=0.5,
             reason=f"Failed to write tool_call.json: {stderr.decode(errors='replace')}",
-            latency_ms=end_ms - start_ms,
+            latency_ms=latency_ms,
         )
 
     # Step 2: clear previous verdict
-    await _docker_exec(
-        container_name,
-        ["sh", "-c", "rm -f /verdict.json"],
-    )
+    t0 = time.monotonic()
+    await _docker_exec(container_name, ["sh", "-c", "rm -f /verdict.json"])
+    timings["clear_verdict_ms"] = (time.monotonic() - t0) * 1000
 
     # Step 3: run claude -p with investigation prompt (with timeout — fail-closed)
+    t0 = time.monotonic()
+    claude_stdout = b""
+    claude_stderr = b""
     try:
-        rc, _, stderr = await asyncio.wait_for(
+        rc, claude_stdout, claude_stderr = await asyncio.wait_for(
             _docker_exec(
                 container_name,
                 ["claude", "-p", _INVESTIGATION_PROMPT, "--output-format", "text"],
@@ -175,40 +183,49 @@ async def run_agentic_judge(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        end_ms = time.monotonic() * 1000
+        timings["claude_investigation_ms"] = (time.monotonic() - t0) * 1000
+        latency_ms = (time.monotonic() - overall_start) * 1000
         return JudgeVote(
             judge_name=judge_name, model_id=model_id,
             decision="reject", confidence=0.5,
             reason=f"judge investigation exceeded {timeout_seconds}s timeout — fail-closed reject",
-            latency_ms=end_ms - start_ms,
+            latency_ms=latency_ms,
         )
+    timings["claude_investigation_ms"] = (time.monotonic() - t0) * 1000
+
+    # Persist the claude -p transcript if transcript_dir was provided
+    if transcript_dir:
+        _Path(transcript_dir).mkdir(parents=True, exist_ok=True)
+        ts = int(time.time() * 1000)
+        _Path(transcript_dir, f"{judge_name}_{ts}.stdout").write_bytes(claude_stdout)
+        _Path(transcript_dir, f"{judge_name}_{ts}.stderr").write_bytes(claude_stderr)
+
     if rc != 0:
-        end_ms = time.monotonic() * 1000
+        latency_ms = (time.monotonic() - overall_start) * 1000
         return JudgeVote(
             judge_name=judge_name, model_id=model_id,
             decision="reject", confidence=0.5,
-            reason=f"claude -p failed (exit {rc}): {stderr.decode(errors='replace')[:500]}",
-            latency_ms=end_ms - start_ms,
+            reason=f"claude -p failed (exit {rc}): {claude_stderr.decode(errors='replace')[:500]}",
+            latency_ms=latency_ms,
         )
 
     # Step 4: read verdict.json
-    rc, verdict_bytes, _ = await _docker_exec(
-        container_name,
-        ["cat", "/verdict.json"],
-    )
+    t0 = time.monotonic()
+    rc, verdict_bytes, _ = await _docker_exec(container_name, ["cat", "/verdict.json"])
+    timings["read_verdict_ms"] = (time.monotonic() - t0) * 1000
     if rc != 0:
-        end_ms = time.monotonic() * 1000
+        latency_ms = (time.monotonic() - overall_start) * 1000
         return JudgeVote(
             judge_name=judge_name, model_id=model_id,
             decision="reject", confidence=0.5,
             reason="verdict.json not found — judge may not have written it",
-            latency_ms=end_ms - start_ms,
+            latency_ms=latency_ms,
         )
     verdict_raw = verdict_bytes.decode(errors="replace")
 
     # Step 5: parse and annotate latency
-    end_ms = time.monotonic() * 1000
+    latency_ms = (time.monotonic() - overall_start) * 1000
     vote = parse_verdict_json(verdict_raw, judge_name=judge_name, model_id=model_id)
-    vote.latency_ms = end_ms - start_ms
+    vote.latency_ms = latency_ms
 
     return vote

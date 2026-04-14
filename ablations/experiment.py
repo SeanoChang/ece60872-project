@@ -43,6 +43,13 @@ class ExperimentRunner:
         self.results_dir = Path(results_root) / self.ablation_name
         self.results_dir.mkdir(parents=True, exist_ok=True)
         (self.results_dir / "scenarios").mkdir(exist_ok=True)
+        transcript_dir = self.results_dir / "judge_transcripts"
+        transcript_dir.mkdir(exist_ok=True)
+
+        # Write an effective config that carries the runtime transcript_dir
+        self.ablation["transcript_dir"] = str(transcript_dir)
+        self.effective_config_path = self.results_dir / "effective_config.json"
+        self.effective_config_path.write_text(json.dumps(self.ablation, indent=2))
 
         self.container_mgr = JudgeContainerManager(
             image=judge_image,
@@ -54,7 +61,7 @@ class ExperimentRunner:
         self.infra = InfrastructureServices(
             api_key=api_key,
             results_dir=str(self.results_dir),
-            orchestrator_config_path=ablation_config_path,
+            orchestrator_config_path=str(self.effective_config_path),
         )
 
         self.run_results: list[dict] = []
@@ -133,19 +140,31 @@ class ExperimentRunner:
             proxy_url="http://host.docker.internal:8081",
             orchestrator_url="http://host.docker.internal:8080",
         )
+
+        run_start = time.time()
         rc, stdout, stderr = await run_runner_agent(runner_cfg)
+        run_duration = time.time() - run_start
+
+        # Write full stdout / stderr to separate files (no truncation)
+        run_id = f"{scenario.scenario_id}_rep{rep}"
+        stdout_file = self.results_dir / "scenarios" / f"{run_id}.stdout"
+        stderr_file = self.results_dir / "scenarios" / f"{run_id}.stderr"
+        stdout_file.write_bytes(stdout)
+        stderr_file.write_bytes(stderr)
 
         result = {
             "scenario_id": scenario.scenario_id,
             "scenario_path": scenario_path,
             "rep": rep,
             "agent_return_code": rc,
-            "agent_stderr": stderr.decode(errors="replace")[-500:],
+            "agent_duration_seconds": round(run_duration, 2),
+            "stdout_path": str(stdout_file),
+            "stderr_path": str(stderr_file),
             "canaries": canaries,
-            "timestamp": time.time(),
+            "timestamp": run_start,
         }
 
-        result_file = self.results_dir / "scenarios" / f"{scenario.scenario_id}_rep{rep}.json"
+        result_file = self.results_dir / "scenarios" / f"{run_id}.json"
         result_file.write_text(json.dumps(result, indent=2))
         return result
 

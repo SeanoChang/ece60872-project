@@ -28,6 +28,7 @@ from core.voting import majority_vote
 async def run_judges(
     tool_call: ToolCall,
     judge_configs: list[JudgeConfig],
+    transcript_dir: str | None = None,
 ) -> list[JudgeVote]:
     """Dispatch agentic judges in parallel via docker exec."""
     tasks = [
@@ -36,6 +37,7 @@ async def run_judges(
             tool_call=tool_call,
             judge_name=config.name,
             model_id=config.model,
+            transcript_dir=transcript_dir,
         )
         for config in judge_configs
     ]
@@ -82,18 +84,25 @@ def create_app(config: dict) -> FastAPI:
     # POST /judge
     # ------------------------------------------------------------------
 
+    # Directory where judges write their claude -p transcripts
+    transcript_dir_path = config.get("transcript_dir")
+
     @app.post("/judge")
     async def judge(payload: dict) -> JSONResponse:
         """Receive a PreToolUse hook payload, dispatch judges, and return the decision."""
+        hook_received_ms = time.time() * 1000
         tool_call = ToolCall.from_hook_payload(payload)
 
         # Dispatch judges in parallel
         t0 = time.time()
-        votes: list[JudgeVote] = await run_judges(tool_call, judge_configs)
+        votes: list[JudgeVote] = await run_judges(
+            tool_call, judge_configs, transcript_dir=transcript_dir_path
+        )
 
         # Aggregate via majority vote
         result: VoteResult = majority_vote(votes)
-        total_latency_ms = (time.time() - t0) * 1000
+        hook_returned_ms = time.time() * 1000
+        dispatch_duration_ms = (time.time() - t0) * 1000
 
         # Build the log record
         judge_records = [
@@ -123,6 +132,9 @@ def create_app(config: dict) -> FastAPI:
             "quorum_rule": result.quorum_rule,
             "total_latency_ms": result.total_latency_ms,
             "total_cost_usd": result.total_cost_usd,
+            "hook_received_ms": hook_received_ms,
+            "hook_returned_ms": hook_returned_ms,
+            "dispatch_duration_ms": dispatch_duration_ms,
         }
 
         # Persist to JSONL
