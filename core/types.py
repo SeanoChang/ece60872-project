@@ -89,6 +89,7 @@ class JudgeVote:
     reason: str
     investigation_steps: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
+    phase_timings_ms: dict[str, float] = field(default_factory=dict)
     latency_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0

@@ -142,6 +142,32 @@ async def test_hook_orchestrator_error():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_evaluate_tool_call_forwards_scenario_run_id_header(monkeypatch):
+    """evaluate_tool_call forwards SCENARIO_RUN_ID / BFT_RUN_ID env as HTTP headers."""
+    monkeypatch.setenv("SCENARIO_RUN_ID", "sr-abc123")
+    monkeypatch.setenv("BFT_RUN_ID", "run-xyz")
+
+    mock_resp = _mock_response(200, {"decision": "approve", "reason": "safe"})
+
+    captured: dict = {}
+
+    async def capture_post(url, json=None, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return mock_resp
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.post = AsyncMock(side_effect=capture_post)
+
+        exit_code, output = await evaluate_tool_call(SAMPLE_PAYLOAD, ORCHESTRATOR_URL)
+
+    assert exit_code == 0
+    assert captured["headers"]["x-scenario-run-id"] == "sr-abc123"
+    assert captured["headers"]["x-run-id"] == "run-xyz"
+
+
 def test_main_approve_exits_0(monkeypatch):
     """main() on approve: sys.exit(0) called, nothing written to stderr."""
     payload_str = json.dumps(SAMPLE_PAYLOAD)

@@ -55,9 +55,17 @@ async def evaluate_tool_call(
     """
     judge_url = f"{orchestrator_url.rstrip('/')}/judge"
 
+    headers: dict[str, str] = {}
+    scenario_run_id = os.environ.get("SCENARIO_RUN_ID")
+    run_id = os.environ.get("BFT_RUN_ID")
+    if scenario_run_id:
+        headers["x-scenario-run-id"] = scenario_run_id
+    if run_id:
+        headers["x-run-id"] = run_id
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(judge_url, json=payload)
+            response = await client.post(judge_url, json=payload, headers=headers)
         response.raise_for_status()
         data: dict[str, Any] = response.json()
     except Exception as exc:

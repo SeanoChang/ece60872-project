@@ -27,3 +27,7 @@ Thumbs.db
 # (defense-in-depth — .env gitignore is the primary control)
 *.key
 *.pem
+
+# Planning/tooling artifacts — local only
+.superpowers/
+docs/superpowers/

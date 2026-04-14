@@ -5,7 +5,12 @@ These are UNIT tests only; no real HTTP forwarding is tested.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+from fastapi.testclient import TestClient
 
 from core.api_proxy import ApiProxy
 
@@ -145,3 +150,114 @@ def test_track_spend_no_usage(proxy: ApiProxy):
 
     assert cost == 0.0
     assert proxy.get_spend("agent-main") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — api_call event emission via events_dir (unit-level constructor check)
+# ---------------------------------------------------------------------------
+# NOTE: End-to-end api_call event emission (writing api_call.jsonl) requires a
+# real upstream HTTP round-trip through proxy_request handler and is covered by
+# integration testing.  The constructor-level check below verifies that
+# ApiProxy correctly stores ablation and events_dir for later use.
+
+
+def test_api_proxy_stores_ablation_and_events_dir(tmp_path):
+    """ApiProxy stores ablation and events_dir passed at construction time."""
+    log_file = tmp_path / "proxy.jsonl"
+    proxy = ApiProxy(
+        host="127.0.0.1",
+        port=8082,
+        api_key="sk-ant-TESTKEY",
+        budgets={"agent-main": 5.0},
+        log_path=str(log_file),
+        ablation="A4",
+        events_dir=str(tmp_path),
+    )
+
+    assert proxy._ablation == "A4"
+    assert proxy._events_dir == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — end-to-end api_call event emission through FastAPI app
+# ---------------------------------------------------------------------------
+
+
+def test_api_proxy_emits_api_call_event_with_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ApiProxy emits an ApiCall JSONL event after a forwarded request.
+
+    Uses FastAPI TestClient to hit the proxy's ASGI app directly, with the
+    upstream httpx client monkeypatched to return a canned Anthropic-style
+    response.  Verifies that run_id (from BFT_RUN_ID env var) and all key
+    fields are captured in the emitted event.
+    """
+    monkeypatch.setenv("BFT_RUN_ID", "run-integration-test")
+    events_dir = tmp_path / "events"
+    proxy = ApiProxy(
+        host="127.0.0.1",
+        port=0,
+        api_key="test-key",
+        budgets={"agent-main": 5.0},
+        log_path=str(tmp_path / "proxy.jsonl"),
+        ablation="test-ablation",
+        events_dir=str(events_dir),
+    )
+
+    canned_body = {
+        "model": "claude-opus-4-5",
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+        "content": [{"type": "text", "text": "ok"}],
+    }
+    mock_response = MagicMock()
+    mock_response.json.return_value = canned_body
+    mock_response.content = json.dumps(canned_body).encode()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    proxy._client.request = AsyncMock(return_value=mock_response)
+
+    client = TestClient(proxy._app)
+    resp = client.post(
+        "/v1/messages",
+        headers={"x-judge-id": "agent-main", "content-type": "application/json"},
+        json={"model": "claude-opus-4-5", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200
+
+    event_path = events_dir / "api_call.jsonl"
+    assert event_path.exists(), f"expected api_call.jsonl at {event_path}"
+    lines = event_path.read_text().splitlines()
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+
+    assert event["run_id"] == "run-integration-test"
+    assert event["ablation"] == "test-ablation"
+    assert event["agent_id"] == "agent-main"
+    assert event["input_tokens"] == 100
+    assert event["output_tokens"] == 50
+    assert event["cost_usd"] > 0  # claude-opus pricing (100 in + 50 out)
+    assert event["model"] == "claude-opus-4-5"
+    assert event["upstream_status"] == 200
+    assert event["scenario_run_id"] in ("unknown", "")
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — run_id is captured from BFT_RUN_ID env var at construction time
+# ---------------------------------------------------------------------------
+
+
+def test_api_proxy_run_id_from_env(tmp_path, monkeypatch):
+    """ApiProxy reads BFT_RUN_ID from env at init time (ContextVars don't survive subprocess)."""
+    monkeypatch.setenv("BFT_RUN_ID", "run-xyz")
+
+    log_file = tmp_path / "proxy.jsonl"
+    proxy = ApiProxy(
+        host="127.0.0.1",
+        port=8083,
+        api_key="sk-ant-TESTKEY",
+        budgets={"agent-main": 5.0},
+        log_path=str(log_file),
+    )
+
+    assert proxy._run_id == "run-xyz"
