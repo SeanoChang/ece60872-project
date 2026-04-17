@@ -117,7 +117,7 @@ class ApiProxy:
             app=self._app,
             host=self.host,
             port=self._requested_port,
-            log_level="warning",
+            log_level="info",
         )
         self._server = uvicorn.Server(config)
         self._task = asyncio.create_task(self._server.serve())
@@ -225,7 +225,11 @@ class ApiProxy:
             methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         )
         async def proxy_request(path: str, request: Request) -> Response:
-            agent_id = request.headers.get("x-judge-id", "")
+            # Default to "agent-main" when no x-judge-id is sent. The runner
+            # agent (Claude Code in the agent container) cannot inject custom
+            # headers, so its requests arrive header-less; treat them as the
+            # main agent identity which has its own budget entry.
+            agent_id = request.headers.get("x-judge-id") or "agent-main"
 
             # Budget check (soft cap — actual cost tracked after response)
             if not self._check_budget(agent_id):
@@ -298,10 +302,23 @@ class ApiProxy:
                 events_path = Path(self._events_dir) / "api_call.jsonl"
                 JSONLLogger(str(events_path)).append_event(event)
 
+            # Drop hop-by-hop and framing headers — we've buffered the upstream
+            # body, so Starlette will set Content-Length itself. Forwarding the
+            # upstream's Transfer-Encoding: chunked (or its own Content-Length)
+            # corrupts the response framing and clients close the socket with
+            # "terminated".
+            _DROP = {
+                "transfer-encoding", "content-length", "content-encoding",
+                "connection", "keep-alive", "te", "trailers", "upgrade",
+            }
+            forwarded = {
+                k: v for k, v in upstream_resp.headers.items()
+                if k.lower() not in _DROP
+            }
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
-                headers=dict(upstream_resp.headers),
+                headers=forwarded,
                 media_type=upstream_resp.headers.get("content-type"),
             )
 

@@ -31,3 +31,13 @@ Thumbs.db
 # Planning/tooling artifacts — local only
 .superpowers/
 docs/superpowers/
+
+# Claude Code private state: worktrees, codebase map, memory, etc.
+# Worktrees contain nested .git dirs → git warns about "embedded repository"
+# and creates dangling gitlinks. Keep all of Claude Code's workspace local.
+.claude/
+
+# Top-level experiment-output dumps from GHA artifact extraction.
+# Real results always live under results/ (already ignored above).
+/A4/
+/experiment-A4-*/

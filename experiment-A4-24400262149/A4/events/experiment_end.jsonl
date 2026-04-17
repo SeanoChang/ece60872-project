@@ -1,1 +1,0 @@
-{"schema_version":"1","event_id":"6819e7bb-aefb-423b-8f34-8c3c458793ac","timestamp":"2026-04-14T13:00:22.686136+00:00","run_id":"exp-1776171620670-2d867beb","scenario_run_id":null,"judgment_id":null,"ablation":"A4","event_type":"experiment_end","total_runs":1,"duration_seconds":2.014578342437744,"soft_abort":true}

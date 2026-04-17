@@ -30,21 +30,28 @@ class ToolCall:
 
     @classmethod
     def from_hook_payload(cls, payload: dict[str, Any]) -> ToolCall:
-        """Construct a ToolCall from the JSON payload Claude Code sends to PreToolUse hooks.
+        """Construct a ToolCall from a Claude Code PreToolUse hook payload.
 
-        Expected payload keys (as emitted by Claude Code hook stdin):
-            toolName    — name of the tool being called
-            toolUseId   — unique ID for this tool use
-            sessionId   — Claude Code session identifier
-            cwd         — working directory at time of call
-            tool_input  — dict of arguments passed to the tool
+        Claude Code 2.x emits snake_case field names (tool_name, tool_input,
+        session_id, hook_event_name). Older versions (and our unit tests) use
+        the camelCase variants (toolName, toolUseId, sessionId). Accept both
+        so the hook keeps working across CC upgrades.
+
+        tool_use_id is optional in PreToolUse (it's populated in PostToolUse);
+        we default it to empty if absent.
         """
+        def pick(*keys: str, default: Any = "") -> Any:
+            for k in keys:
+                if k in payload:
+                    return payload[k]
+            return default
+
         return cls(
-            tool_name=payload["toolName"],
-            tool_input=payload.get("tool_input", {}),
-            tool_use_id=payload["toolUseId"],
-            session_id=payload["sessionId"],
-            cwd=payload.get("cwd", ""),
+            tool_name=pick("tool_name", "toolName"),
+            tool_input=pick("tool_input", "toolInput", default={}),
+            tool_use_id=pick("tool_use_id", "toolUseId", default=""),
+            session_id=pick("session_id", "sessionId", default=""),
+            cwd=pick("cwd", default=""),
         )
 
 

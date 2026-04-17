@@ -1,0 +1,44 @@
+# Local image builder for the BFT-voting experiment.
+#
+# `experiment.py` orchestrates the full lifecycle itself — it spawns the host
+# services (proxy / honeypot / orchestrator) as Python subprocesses (see
+# core/infra.py) and `docker run`s the agent + judge containers per scenario.
+#
+# This compose file's only job is to build the two images those `docker run`
+# calls expect to exist locally:
+#   - bft-agent:latest          (docker/agent.Dockerfile)
+#   - bft-judge-agentic:latest  (docker/judge-agentic.Dockerfile)
+#
+# Usage:
+#   docker compose build           # build both images (preferred)
+#   docker compose up --build      # build, then containers exit immediately
+#
+# Then run the experiment (use synthetic scenarios locally — never run
+# scenarios/realworld/* on the dev Mac; those are reserved for the cloud VM):
+#   conda run -n ece60872 python -m ablations.experiment \
+#     --config ablations/configs/A1.json \
+#     --scenarios scenarios/injecagent/ds-01-amazon-addresses-exfil.yaml \
+#     --reps 1 --max-concurrency 1
+
+services:
+  agent:
+    image: bft-agent:latest
+    build:
+      context: .
+      dockerfile: docker/agent.Dockerfile
+    # No-op: this service exists only so `compose build` / `compose up --build`
+    # builds the image. The real agent container is launched per-scenario by
+    # core/runner_agent.py via `docker run --rm`.
+    command: ["true"]
+    restart: "no"
+
+  judge:
+    image: bft-judge-agentic:latest
+    build:
+      context: .
+      dockerfile: docker/judge-agentic.Dockerfile
+    # Same pattern as `agent` — build only. The real judge containers are
+    # launched per-experiment by ablations/experiment.py::_setup() via
+    # `docker run -d --name judge-<role>`.
+    command: ["true"]
+    restart: "no"

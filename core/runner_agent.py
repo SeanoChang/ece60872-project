@@ -58,7 +58,7 @@ async def run_runner_agent(
         "-e",
         f"ANTHROPIC_BASE_URL={config.proxy_url}",
         "-e",
-        "ANTHROPIC_API_KEY=",
+        "ANTHROPIC_API_KEY=proxied",
         "-e",
         f"JUDGE_ORCHESTRATOR_URL={config.orchestrator_url}",
         "-e",
@@ -72,6 +72,12 @@ async def run_runner_agent(
         config.task_prompt,
         "--output-format",
         "stream-json",
+        "--verbose",
+        # Claude Code 2.1+ requires an explicit setting source to load
+        # ~/.claude/settings.json; without this the PreToolUse hook config
+        # is ignored and the judge layer never runs.
+        "--setting-sources",
+        "user",
     ]
 
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=PIPE, stderr=PIPE)

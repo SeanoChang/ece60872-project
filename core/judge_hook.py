@@ -101,30 +101,42 @@ async def evaluate_tool_call(
 
 
 def main() -> None:
-    """Read JSON from stdin, evaluate, write outputs, and exit with proper code."""
-    raw = sys.stdin.read()
-    payload: dict[str, Any] = json.loads(raw)
+    """Read JSON from stdin, evaluate, write outputs, and exit with proper code.
 
-    orchestrator_url = os.environ.get("JUDGE_ORCHESTRATOR_URL", _DEFAULT_ORCHESTRATOR_URL)
+    Claude Code's hook protocol treats exit code 2 as "deny" and *any other
+    non-zero* as "no opinion" (the tool call is allowed). That means an
+    uncaught exception (ImportError, network glitch, malformed stdin, etc.)
+    silently fails open. Wrap the whole body so any failure becomes a
+    fail-closed rejection.
+    """
+    try:
+        raw = sys.stdin.read()
+        payload: dict[str, Any] = json.loads(raw)
 
-    exit_code, output = asyncio.run(evaluate_tool_call(payload, orchestrator_url))
+        orchestrator_url = os.environ.get("JUDGE_ORCHESTRATOR_URL", _DEFAULT_ORCHESTRATOR_URL)
 
-    # Write structured output to stdout if non-empty (approve path has nothing to write)
-    if output:
-        sys.stdout.write(json.dumps(output))
-        sys.stdout.flush()
+        exit_code, output = asyncio.run(evaluate_tool_call(payload, orchestrator_url))
 
-    # Write reason to stderr on reject so Claude Code shows it as feedback
-    if exit_code == 2:
-        reason = ""
-        hook_out = output.get("hookSpecificOutput", {})
-        if hook_out:
-            reason = hook_out.get("permissionDecisionReason", "")
-        if reason:
-            sys.stderr.write(reason)
-            sys.stderr.flush()
+        if output:
+            sys.stdout.write(json.dumps(output))
+            sys.stdout.flush()
 
-    sys.exit(exit_code)
+        if exit_code == 2:
+            reason = ""
+            hook_out = output.get("hookSpecificOutput", {})
+            if hook_out:
+                reason = hook_out.get("permissionDecisionReason", "")
+            if reason:
+                sys.stderr.write(reason)
+                sys.stderr.flush()
+
+        sys.exit(exit_code)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001  intentional: fail-closed catch-all
+        sys.stderr.write(f"judge_hook fail-closed: {type(exc).__name__}: {exc}")
+        sys.stderr.flush()
+        sys.exit(2)
 
 
 if __name__ == "__main__":
