@@ -155,11 +155,11 @@ Flow:
 
 Runs a judgment inside a persistent judge container via `asyncio.create_subprocess_exec` on `docker`:
 
-1. **Write**: `docker exec -i {name} sh -c 'cat > /tool_call.json'` with JSON on stdin
-2. **Clear**: `docker exec {name} sh -c 'rm -f /verdict.json'`
-3. **Investigate**: `docker exec {name} claude -p "{INVESTIGATION_PROMPT}" --output-format text` — wrapped in `asyncio.wait_for(timeout=500s)`. On timeout → fail-closed reject vote. On non-zero exit → fail-closed reject with stderr truncated to 500 chars.
-4. **Read**: `docker exec {name} cat /verdict.json`
-5. **Parse**: `parse_verdict_json` extracts decision/confidence/reason/investigation_steps. On malformed JSON → reject with confidence 0.5.
+1. **Write**: `docker exec -i {name} sh -c 'cat > /judge/tool_call.json'` with JSON on stdin (paths live inside `/judge` WORKDIR so Read is auto-allowed under default permission mode)
+2. **Clear**: `docker exec {name} sh -c 'rm -f /judge/verdict.json'`
+3. **Investigate**: `docker exec {name} claude -p "{INVESTIGATION_PROMPT}" --output-format stream-json --verbose --model {model_id} --setting-sources user --permission-mode acceptEdits` — wrapped in `asyncio.wait_for(timeout=500s)`. `acceptEdits` auto-approves the judge's `Write(/judge/verdict.json)` without triggering Claude Code's root-safety block. On timeout → fail-closed reject vote. On non-zero exit → fail-closed reject with stderr truncated to 500 chars; cost_usd captured from stream-json before the early-return so real spend is still reported.
+4. **Read**: `docker exec {name} cat /judge/verdict.json`
+5. **Parse**: `parse_verdict_json` extracts decision/confidence/reason/investigation_steps. On malformed JSON → reject with confidence 0.5. `extract_result_cost(claude_stdout)` from `core/stream_parser.py` walks the stream-json for the final `type: "result"` event and sets `vote.cost_usd` to the CLI-computed `total_cost_usd` (authoritative source — applies cache discounts, already aggregates per-message usage).
 
 If `transcript_dir` set, writes each investigation's stdout/stderr to `{transcript_dir}/{judge_name}_{timestamp}.{stdout,stderr}`.
 
@@ -293,17 +293,21 @@ Runner Agent Container
         │  run_judges() → asyncio.gather of 3 run_agentic_judge() calls
         │
         ▼
-    Each run_agentic_judge (parallel):
-        │  docker exec judge-{name} sh -c 'cat > /tool_call.json' (stdin: payload)
-        │  docker exec judge-{name} sh -c 'rm -f /verdict.json'
-        │  docker exec judge-{name} claude -p "{INVESTIGATION_PROMPT}" --output-format text
+    Each run_agentic_judge (parallel, staggered by _JUDGE_STAGGER_SECONDS):
+        │  docker exec judge-{name} sh -c 'cat > /judge/tool_call.json' (stdin: payload)
+        │  docker exec judge-{name} sh -c 'rm -f /judge/verdict.json'
+        │  docker exec judge-{name} claude -p "{INVESTIGATION_PROMPT}" \
+        │      --output-format stream-json --verbose \
+        │      --model {model_id} --setting-sources user \
+        │      --permission-mode acceptEdits
         │      │
         │      │  Inside judge container: Claude Code reads IDENTITY.md + skills/,
         │      │  investigates /workspace (ro), uses /sandbox for npm --dry-run etc.,
-        │      │  makes LLM calls via proxy, writes /verdict.json
+        │      │  makes LLM calls via proxy, writes /judge/verdict.json
         │      │
-        │  docker exec judge-{name} cat /verdict.json
+        │  docker exec judge-{name} cat /judge/verdict.json
         │  parse_verdict_json → JudgeVote
+        │  extract_result_cost(stdout) → vote.cost_usd
         │
         ▼
     Back in orchestrator:

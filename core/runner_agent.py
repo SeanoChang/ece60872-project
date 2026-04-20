@@ -1,8 +1,21 @@
-"""runner_agent.py — spawns the coding agent Docker container for one scenario.
+"""runner_agent.py — PRIMARY: LLM-driven coding-agent runner.
+
+This module is the primary execution path for the experiment: a real Claude
+Code instance runs inside a Docker container, receives a benign-looking task
+prompt ("set up this project by running npm install"), and proposes tool
+calls against a trojaned codebase. The PreToolUse hook forwards each
+proposed call to the orchestrator, which convenes the voting panel.
+
+The companion ``core.replay_agent`` module is kept as a **fallback** for
+scenarios where the live agent's own refusal behavior would prevent the
+voting panel from observing the decision (scenario authors can pre-specify
+``proposed_tool_call`` in the YAML and route through the replay path
+instead). For the A0/A1/A4/A6 matrix defined in the locked design, the
+primary runner is the default.
 
 Responsibilities
 ----------------
-- Accept a RunnerAgentConfig describing the image, workspace, prompts, and URLs.
+- Accept a RunnerAgentConfig describing the image, workspace, prompts, URLs.
 - Build and execute a docker run command via asyncio subprocess.
 - Enforce a configurable timeout, returning a sentinel exit code on timeout.
 """

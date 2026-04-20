@@ -17,6 +17,13 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN mkdir -p /judge /workspace /sandbox
 WORKDIR /judge
 
+# Baseline Claude Code settings for judges. Carries model default +
+# permissions.defaultMode=bypassPermissions so `claude -p` doesn't stall on
+# interactive permission prompts (which can't be answered in -p mode).
+# Loaded when agentic_judge passes --setting-sources user.
+RUN mkdir -p /root/.claude
+COPY docker/judge-settings.json /root/.claude/settings.json
+
 # Environment — proxy handles API key
 ENV ANTHROPIC_API_KEY="proxied"
 ENV ANTHROPIC_BASE_URL="http://host.docker.internal:8081"

@@ -3,7 +3,7 @@
   "judges": [
     {
       "name": "judge-param",
-      "model": "claude-sonnet-4-6-20260101",
+      "model": "claude-haiku-4-5-20251001",
       "system_prompt_path": "prompts/honest/param.md",
       "temperature": 0.0,
       "role": "param",
@@ -13,7 +13,7 @@
     },
     {
       "name": "judge-intent",
-      "model": "claude-sonnet-4-6-20260101",
+      "model": "claude-haiku-4-5-20251001",
       "system_prompt_path": "prompts/honest/intent.md",
       "temperature": 0.0,
       "role": "intent",
@@ -23,7 +23,7 @@
     },
     {
       "name": "judge-threat",
-      "model": "claude-sonnet-4-6-20260101",
+      "model": "claude-haiku-4-5-20251001",
       "system_prompt_path": "prompts/honest/threat.md",
       "temperature": 0.0,
       "role": "threat",

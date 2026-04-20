@@ -33,21 +33,52 @@ from core.voting import majority_vote
 # ---------------------------------------------------------------------------
 
 
+# Stagger between sequential judge launches (seconds). Three concurrent
+# Claude Code investigations hitting the proxy at the same instant routinely
+# exceeded the Anthropic Tier 1 limit of 30,000 input tokens per minute and
+# one judge would 429-fail at CLI startup with 0 bytes output. Staggering the
+# dispatches by a few seconds lets each judge's initial prompt + context load
+# clear the TPM bucket before the next one starts; judges still overlap for
+# most of their investigation, so wall-clock parallelism is preserved.
+_JUDGE_STAGGER_SECONDS: float = 3.0
+
+
+async def _launch_judge_with_delay(
+    delay: float,
+    *,
+    container_name: str,
+    tool_call: ToolCall,
+    judge_name: str,
+    model_id: str,
+    transcript_dir: str | None,
+) -> JudgeVote:
+    if delay > 0:
+        await asyncio.sleep(delay)
+    return await run_agentic_judge(
+        container_name=container_name,
+        tool_call=tool_call,
+        judge_name=judge_name,
+        model_id=model_id,
+        transcript_dir=transcript_dir,
+    )
+
+
 async def run_judges(
     tool_call: ToolCall,
     judge_configs: list[JudgeConfig],
     transcript_dir: str | None = None,
 ) -> list[JudgeVote]:
-    """Dispatch agentic judges in parallel via docker exec."""
+    """Dispatch agentic judges in parallel via docker exec, staggered to respect TPM limits."""
     tasks = [
-        run_agentic_judge(
+        _launch_judge_with_delay(
+            delay=i * _JUDGE_STAGGER_SECONDS,
             container_name=f"judge-{config.name}",
             tool_call=tool_call,
             judge_name=config.name,
             model_id=config.model,
             transcript_dir=transcript_dir,
         )
-        for config in judge_configs
+        for i, config in enumerate(judge_configs)
     ]
     return list(await asyncio.gather(*tasks))
 
@@ -99,6 +130,18 @@ def create_app(config: dict) -> FastAPI:
     @app.post("/judge")
     async def judge(payload: dict, request: Request) -> JSONResponse:
         """Receive a PreToolUse hook payload, dispatch judges, and return the decision."""
+        # A0 short-circuit: an empty judge panel means "agent alone, no guard."
+        # Auto-approve every tool call and return immediately — no correlation
+        # context is opened, no judgment event is emitted, because A0's
+        # semantics are "panel was never involved." Emitting a judgment with
+        # empty votes would misleadingly count A0 as a panel-exercised run.
+        if not judge_configs:
+            return JSONResponse(content={
+                "decision": "approve",
+                "reason": "A0 baseline: no judges configured; all tool calls auto-approved",
+                "votes": [],
+            })
+
         judgment_id = new_judgment_id()
 
         scenario_run_id = request.headers.get("x-scenario-run-id")

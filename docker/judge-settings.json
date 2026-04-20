@@ -1,0 +1,4 @@
+{
+  "_comment": "Baseline settings injected into every judge container via docker/judge-agentic.Dockerfile. Loaded by `claude -p --setting-sources user` from /root/.claude/settings.json. The model field is a fallback; per-judge model comes from the --model CLI flag passed by core/agentic_judge.run_agentic_judge based on the ablation config's judge.model field. NOTE: no permissions.defaultMode set — Claude Code 2.1 rejects bypassPermissions when the container runs as root (Docker default). The hardened _INVESTIGATION_PROMPT in core/agentic_judge.py blocks skill auto-activation that was causing out-of-cwd permission prompts; remaining Read(/tool_call.json) / Read(/workspace/**) / Write(/verdict.json) / Bash operations are allowed under default permission mode because they're within cwd.",
+  "model": "claude-haiku-4-5-20251001"
+}

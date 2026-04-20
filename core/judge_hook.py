@@ -63,8 +63,14 @@ async def evaluate_tool_call(
     if run_id:
         headers["x-run-id"] = run_id
 
+    # Hook-side HTTP client has no internal timeout. Agentic judges routinely
+    # take 30-120s for a real investigation, and the outer Claude Code hook
+    # timeout (see docker/claude-settings.json — currently 600s) already
+    # bounds the wait. Capping earlier here just fail-closes prematurely
+    # while the orchestrator is still producing a real verdict, which
+    # contaminates the detection-rate metric with infra-induced rejects.
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(judge_url, json=payload, headers=headers)
         response.raise_for_status()
         data: dict[str, Any] = response.json()

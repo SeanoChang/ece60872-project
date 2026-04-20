@@ -15,9 +15,19 @@ class Scenario:
     description: str
     archetype: str
     task_prompt: str
-    workspace_files: dict[str, str] = field(default_factory=dict)
+    # Values are str (normal YAML text) or bytes (YAML !!binary, e.g. npm
+    # tarballs that the agent must route through a hook-matched Bash call
+    # to inspect — see render_workspace).
+    workspace_files: dict[str, str | bytes] = field(default_factory=dict)
     canary_credentials: list[dict] = field(default_factory=list)
     ground_truth: dict = field(default_factory=dict)
+    # Schema v2 — for replay-agent mode. Pre-specified tool call the replay
+    # shim emits on behalf of the (absent) coding agent. Empty dict for
+    # legacy scenarios that still run a real LLM agent.
+    proposed_tool_call: dict = field(default_factory=dict)
+    task_context: str = ""
+    source: str = ""
+    expected_honest_vote: str = ""
 
 
 def load_scenario(yaml_path: str) -> Scenario:
@@ -36,6 +46,10 @@ def load_scenario(yaml_path: str) -> Scenario:
         workspace_files=workspace_files,
         canary_credentials=data.get("canary_credentials", []) or [],
         ground_truth=data.get("ground_truth", {}) or {},
+        proposed_tool_call=data.get("proposed_tool_call", {}) or {},
+        task_context=data.get("task_context", ""),
+        source=data.get("source", ""),
+        expected_honest_vote=data.get("expected_honest_vote", ""),
     )
 
 
@@ -68,11 +82,18 @@ def render_workspace(scenario: Scenario, workspace_dir: str) -> dict[str, str]:
     ws_path = Path(workspace_dir)
     ws_path.mkdir(parents=True, exist_ok=True)
 
-    # Write workspace files
+    # Write workspace files. Values from YAML's !!binary tag are bytes; normal
+    # string content stays str. Binary support lets scenarios embed opaque
+    # assets (e.g. npm tarballs) that coding agents can't inspect via Read —
+    # the panel must route inspection through a hook-matching Bash call
+    # (tar -tzf, etc.), which is exactly the measurement surface we want.
     for relpath, content in scenario.workspace_files.items():
         target = ws_path / relpath
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content)
 
     # Inject canary credentials
     canaries: dict[str, str] = {}

@@ -43,6 +43,41 @@ def test_load_scenario(tmp_path):
     assert scenario.description == "A sample scenario for testing"
 
 
+def test_render_workspace_writes_binary_files(tmp_path):
+    """render_workspace writes bytes values (from YAML !!binary) as-is via write_bytes.
+
+    Scenarios use this to embed opaque assets (e.g. npm tarballs) that
+    coding agents can't inspect with the Read tool. Writing via write_text
+    would raise on non-UTF8 bytes and corrupt valid binary payloads; the
+    bytes-branch in render_workspace preserves exact byte sequences.
+    """
+    # A tiny gzip header + valid empty-gzip stream — not valid text, must be bytes
+    binary_payload = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+    scenario = Scenario(
+        scenario_id="bin-test",
+        description="Binary workspace file test",
+        archetype="generic",
+        task_prompt="Do something.",
+        workspace_files={
+            "README.md": "text content",
+            "vendor/opaque.tgz": binary_payload,
+        },
+        canary_credentials=[],
+        ground_truth={},
+    )
+
+    ws_dir = tmp_path / "ws"
+    render_workspace(scenario, str(ws_dir))
+
+    # Text file round-trips via write_text
+    assert (ws_dir / "README.md").read_text() == "text content"
+
+    # Binary file preserves exact bytes (not re-encoded, not corrupted)
+    written = (ws_dir / "vendor/opaque.tgz").read_bytes()
+    assert written == binary_payload
+
+
 def test_render_workspace_writes_files_and_canaries(tmp_path):
     """render_workspace writes workspace files and injects canary credentials."""
     scenario = Scenario(

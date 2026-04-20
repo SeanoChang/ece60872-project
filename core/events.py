@@ -58,7 +58,14 @@ class ScenarioRunEnd(_EventBase):
     agent_return_code: int
     agent_duration_seconds: float
     honeypot_saw_canary: bool
-    outcome: Literal["attack_succeeded", "attack_blocked", "benign_completed", "infra_failed"]
+    outcome: Literal[
+        "attack_succeeded",
+        "attack_blocked",
+        "false_positive",
+        "benign_completed",
+        "already_solved",
+        "infra_failed",
+    ]
 
 
 class Judgment(_EventBase):

@@ -21,7 +21,18 @@ from core.runner_agent import RunnerAgentConfig, run_runner_agent
 from core.scenario import load_scenario, render_workspace
 from analysis.ground_truth import match_patterns, classify_scenario_outcome
 from analysis.aggregate import aggregate_experiment
-from core.stream_parser import extract_tool_calls as _extract_from_stream
+from core.stream_parser import (
+    extract_tool_calls as _extract_from_stream,
+    extract_tool_uses as _extract_tool_uses_from_stream,
+    extract_result_cost as _extract_result_cost_from_stream,
+)
+
+
+# Tool names that the PreToolUse hook matcher in docker/claude-settings.json
+# actually intercepts. Calls to other tools (Glob, Read, Grep, …) bypass the
+# judge panel entirely — the orchestrator never hears about them. Kept in sync
+# with `hooks.PreToolUse[0].matcher` in that file.
+_HOOK_MATCHED_TOOLS = frozenset({"Bash", "Edit", "Write"})
 
 
 class ExperimentRunner:
@@ -238,11 +249,24 @@ class ExperimentRunner:
 
             honeypot_saw_canary = self._check_honeypot_for_canaries(scenario_run_id)
 
+            # Single-read invariant: panel_rejected and judgments_summary MUST
+            # be derived from the same judgments list. Previously we read the
+            # file twice (once here for panel_rejected, once below for
+            # summary) — under `--max-concurrency > 1` a late-arriving
+            # judgment write could land between the reads and produce an
+            # outcome label inconsistent with judgments_summary.decisions.
+            judgments = self._collect_judgments(scenario_run_id)
+            panel_rejected = any(
+                j.get("decision") == "reject" for j in judgments
+            )
+
             outcome = classify_scenario_outcome(
                 dangerous_matched=len(dangerous_matches),
                 benign_matched=len(benign_matches),
                 honeypot_saw_canary=honeypot_saw_canary,
                 agent_return_code=rc,
+                is_attack_scenario=bool(dangerous_patterns),
+                panel_rejected=panel_rejected,
             )
 
             # Emit scenario_run_end
@@ -259,12 +283,55 @@ class ExperimentRunner:
                 outcome=outcome,
             ))
 
-            # Print runtime summary line for post-hoc review
-            print(
-                f"[{self.ablation_name}] {scenario.scenario_id}_rep{rep} → "
-                f"{outcome} (duration={run_duration:.1f}s, rc={rc})",
-                flush=True,
+            # Structured tool-use list + hook-matcher count. Useful for
+            # distinguishing "agent refused to propose anything" (hook_matched=0)
+            # from "agent proposed but panel approved" (hook_matched>0,
+            # judgments nonempty).
+            tool_uses = _extract_tool_uses_from_stream(stdout)
+            hook_matched = sum(
+                1 for u in tool_uses if u.get("tool_name") in _HOOK_MATCHED_TOOLS
             )
+
+            # Panel config snapshot — what judges were configured to run this
+            # scenario, regardless of whether they were actually invoked.
+            panel_config = {
+                "ablation": self.ablation_name,
+                "num_judges": len(self.ablation.get("judges", [])),
+                "judges": [
+                    {
+                        "name": j["name"],
+                        "role": j.get("role", "general"),
+                        "model": j["model"],
+                        "is_byzantine": j.get("is_byzantine", False),
+                        "compromise_variant": j.get("compromise_variant", ""),
+                    }
+                    for j in self.ablation.get("judges", [])
+                ],
+            }
+
+            # Agent cost comes from the stream-json's final `type: "result"`
+            # event, which carries the CLI-computed total_cost_usd. This is
+            # authoritative — the proxy's api_call.jsonl has been observed to
+            # return $0 because its response parser isn't extracting
+            # Anthropic's usage/cost fields (tracked separately). Stream-json
+            # sidesteps that entirely.
+            agent_cost_usd = _extract_result_cost_from_stream(stdout)
+
+            # Summary derived from the SAME judgments list read above — the
+            # single-read invariant lets us assert:
+            #   panel_rejected == (judgments_summary.decisions.reject > 0)
+            # which the outcome label depends on.
+            judgments_summary = {
+                "count": len(judgments),
+                "decisions": {
+                    "approve": sum(1 for j in judgments if j.get("decision") == "approve"),
+                    "reject": sum(1 for j in judgments if j.get("decision") == "reject"),
+                },
+                "total_latency_ms": sum(j.get("total_latency_ms", 0) for j in judgments),
+                "total_cost_usd": round(
+                    sum(j.get("total_cost_usd", 0.0) for j in judgments), 6
+                ),
+            }
 
             result = {
                 "scenario_id": scenario.scenario_id,
@@ -281,11 +348,97 @@ class ExperimentRunner:
                 "stderr_path": str(stderr_file),
                 "canaries": canaries,
                 "timestamp": run_start,
+                "panel_config": panel_config,
+                "agent_tool_uses": tool_uses,
+                "agent_hook_matching_calls": hook_matched,
+                "agent_cost_usd": round(agent_cost_usd, 6),
+                "judgments": judgments,
+                "judgments_summary": judgments_summary,
+                "total_cost_usd": round(agent_cost_usd + judgments_summary["total_cost_usd"], 6),
             }
 
             result_file = self.results_dir / "scenarios" / f"{run_id_str}.json"
             result_file.write_text(json.dumps(result, indent=2))
+
+            # Runtime summary — headline line followed by a breakdown of
+            # what the agent proposed, what the panel decided, and how
+            # much the run cost.
+            print(
+                f"[{self.ablation_name}] {scenario.scenario_id}_rep{rep} → "
+                f"{outcome} (duration={run_duration:.1f}s, rc={rc})",
+                flush=True,
+            )
+
+            # (1) What triggered the hook
+            hook_matched_uses = [
+                u for u in tool_uses if u.get("tool_name") in _HOOK_MATCHED_TOOLS
+            ]
+            if hook_matched_uses:
+                for u in hook_matched_uses:
+                    cmd = u.get("command", "") or f"({u['tool_name']} with unknown args)"
+                    cmd_short = cmd if len(cmd) <= 80 else cmd[:77] + "..."
+                    print(f"    hook fired on: {u['tool_name']}  {cmd_short}", flush=True)
+            else:
+                matchers = "|".join(sorted(_HOOK_MATCHED_TOOLS))
+                print(
+                    f"    hook fired on: — (agent proposed {len(tool_uses)} tool uses,"
+                    f" none matched {matchers} — panel not exercised)",
+                    flush=True,
+                )
+
+            # (2) + (3) Per-judge votes and panel decision
+            if judgments:
+                for jm in judgments:
+                    print(
+                        f"    panel decision: {jm['decision']}  ({jm['quorum_rule']},"
+                        f" max latency {jm['total_latency_ms']/1000:.1f}s,"
+                        f" judges' cost ${jm['total_cost_usd']:.4f})",
+                        flush=True,
+                    )
+                    for v in jm.get("votes", []):
+                        reason = v.get("reason", "") or ""
+                        if len(reason) > 72:
+                            reason = reason[:69] + "..."
+                        print(
+                            f"      {v['judge_name']:22}  {v['decision']:7}"
+                            f"  {v['latency_ms']/1000:6.1f}s  ${v['cost_usd']:.4f}"
+                            f"  {reason!r}",
+                            flush=True,
+                        )
+            else:
+                print("    panel decision: — (no judgment recorded)", flush=True)
+
+            # (4) Cost estimation for this scenario run
+            judge_cost = judgments_summary["total_cost_usd"]
+            print(
+                f"    cost: agent ${agent_cost_usd:.4f} + judges ${judge_cost:.4f}"
+                f" = ${agent_cost_usd + judge_cost:.4f} total",
+                flush=True,
+            )
+
             return result
+
+    def _collect_judgments(self, scenario_run_id: str) -> list[dict]:
+        """Return every judgment.jsonl record whose scenario_run_id matches.
+
+        Returns [] if the file doesn't exist (the hook never fired during this
+        run) or if no records match. Called after the agent container has
+        exited, so all judgments for this scenario_run_id are already flushed.
+        """
+        path = self.events_dir / "judgment.jsonl"
+        if not path.exists():
+            return []
+        out: list[dict] = []
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("scenario_run_id") == scenario_run_id:
+                out.append(event)
+        return out
 
     def _extract_tool_calls(self, stdout: bytes, stderr: bytes) -> list[str]:
         """Extract agent tool calls from Claude Code's stream-json output."""
@@ -385,6 +538,13 @@ class ExperimentRunner:
 
 
 def main() -> None:
+    # Auto-load .env from the current working directory so `python -m
+    # ablations.experiment` picks up ANTHROPIC_API_KEY without requiring the
+    # user to `export` it separately. load_dotenv defaults to override=False,
+    # so an explicitly-exported value in the shell still wins.
+    from dotenv import load_dotenv
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="Run a BFT voting experiment")
     parser.add_argument("--config", required=True)
     parser.add_argument("--scenarios", nargs="+", required=True)
@@ -400,7 +560,11 @@ def main() -> None:
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        print("ERROR: ANTHROPIC_API_KEY not set", file=sys.stderr)
+        print(
+            "ERROR: ANTHROPIC_API_KEY not set. "
+            "Put it in .env (the driver auto-loads .env from the cwd) or export it.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     runner = ExperimentRunner(
@@ -413,11 +577,25 @@ def main() -> None:
         workspace_dir=args.workspace_dir,
     )
     summary = asyncio.run(runner.run())
+
+    # Roll up costs across all scenario runs in this experiment.
+    agent_cost = sum(
+        float(r.get("agent_cost_usd") or 0.0) for r in summary.get("results", [])
+    )
+    judge_cost = sum(
+        float(r.get("judgments_summary", {}).get("total_cost_usd") or 0.0)
+        for r in summary.get("results", [])
+    )
     print(json.dumps({
         "ablation": summary["ablation"],
         "total_runs": summary["total_runs"],
         "soft_abort": summary["soft_abort"],
         "duration_seconds": round(summary["duration_seconds"], 1),
+        "cost_usd": {
+            "agent": round(agent_cost, 4),
+            "judges": round(judge_cost, 4),
+            "total": round(agent_cost + judge_cost, 4),
+        },
     }, indent=2))
     sys.exit(1 if summary["soft_abort"] else 0)
 

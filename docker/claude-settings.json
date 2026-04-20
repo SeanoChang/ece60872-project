@@ -1,4 +1,6 @@
 {
+  "_comment": "Baseline Claude Code settings for the runner-agent container. model defaults to Haiku 4.5 for cost-controlled iteration; override at CLI with --model if you need Sonnet. NOTE: no permissions.defaultMode set — Claude Code 2.1 rejects bypassPermissions when the container runs as root, which Docker does by default. The agent's Read/Bash/Write operations inside /workspace are allowed under the default permission mode for cwd-scoped paths.",
+  "model": "claude-haiku-4-5-20251001",
   "hooks": {
     "PreToolUse": [
       {
