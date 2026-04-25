@@ -31,7 +31,8 @@ jobs:
 
       - name: Verify package imports
         run: |
-          python -c "from core import types, voting, logger, honeypot, api_proxy, judge_hook, agentic_judge, judge_containers, orchestrator"
+          python -c "from core import types, voting, logger, honeypot, api_proxy, judge_hook, judge_containers, orchestrator"
+          python -c "from core.judges import agentic, openai as openai_judge"
           python -c "from analysis import metrics"
 
   build-images:

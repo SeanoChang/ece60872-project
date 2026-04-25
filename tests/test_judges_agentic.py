@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.agentic_judge import parse_verdict_json
+from core.judges.agentic import parse_verdict_json
 from core.types import JudgeVote, ToolCall
 
 
