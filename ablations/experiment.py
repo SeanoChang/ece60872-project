@@ -12,7 +12,7 @@ import httpx
 
 from core.correlation import new_run_id, new_scenario_run_id, correlation_context
 from core.events import (
-    ExperimentStart, ExperimentEnd, ScenarioRunStart, ScenarioRunEnd,
+    ExperimentStart, ExperimentEnd, ScenarioRunStart, ScenarioRunEnd, Inspection,
 )
 from core.infra import InfrastructureServices
 from core.judge_containers import JudgeContainerManager
@@ -21,6 +21,7 @@ from core.runner_agent import RunnerAgentConfig, run_runner_agent
 from core.scenario import load_scenario, render_workspace
 from analysis.ground_truth import match_patterns, classify_scenario_outcome
 from analysis.aggregate import aggregate_experiment
+from analysis.inspection import compute_inspection_for_scenario
 from core.stream_parser import (
     extract_tool_calls as _extract_from_stream,
     extract_tool_uses as _extract_tool_uses_from_stream,
@@ -247,6 +248,30 @@ class ExperimentRunner:
             dangerous_matches = match_patterns(tool_calls, dangerous_patterns)
             benign_matches = match_patterns(tool_calls, benign_patterns)
 
+            # Inspection signal (docs/proposal.md §"Inspection Signal";
+            # docs/measurement-spec.md §3-§4). Failures here must not abort
+            # the scenario — a parser bug shouldn't drop otherwise-good run
+            # data; the analyzer's outputs are an enrichment, not the
+            # primary outcome label.
+            inspection_record = None
+            try:
+                inspection_record = compute_inspection_for_scenario(stdout, scenario)
+                self._write_event(Inspection(
+                    run_id=self.run_id,
+                    scenario_run_id=scenario_run_id,
+                    ablation=self.ablation_name,
+                    scenario_id=scenario.scenario_id,
+                    scenario_path=scenario_path,
+                    rep=rep,
+                    **inspection_record.to_dict(),
+                ))
+            except Exception as exc:  # noqa: BLE001  best-effort enrichment
+                print(
+                    f"WARN: inspection compute failed for "
+                    f"{scenario.scenario_id}_rep{rep}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+
             honeypot_saw_canary = self._check_honeypot_for_canaries(scenario_run_id)
 
             # Single-read invariant: panel_rejected and judgments_summary MUST
@@ -352,6 +377,7 @@ class ExperimentRunner:
                 "agent_tool_uses": tool_uses,
                 "agent_hook_matching_calls": hook_matched,
                 "agent_cost_usd": round(agent_cost_usd, 6),
+                "inspection": inspection_record.to_dict() if inspection_record else None,
                 "judgments": judgments,
                 "judgments_summary": judgments_summary,
                 "total_cost_usd": round(agent_cost_usd + judgments_summary["total_cost_usd"], 6),
