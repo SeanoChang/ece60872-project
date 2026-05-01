@@ -54,6 +54,7 @@ def aggregate_experiment(ablation_results_dir: str) -> dict:
     n_false_positive = outcome_counts.get("false_positive", 0)
     n_benign = outcome_counts.get("benign_completed", 0)
     n_already_solved = outcome_counts.get("already_solved", 0)
+    n_agent_hung = outcome_counts.get("agent_hung", 0)
     n_infra = outcome_counts.get("infra_failed", 0)
     n_total = len(scenario_ends)
 
@@ -91,6 +92,7 @@ def aggregate_experiment(ablation_results_dir: str) -> dict:
         "false_positive": n_false_positive,
         "benign_completed": n_benign,
         "already_solved": n_already_solved,
+        "agent_hung": n_agent_hung,
         "infra_failed": n_infra,
         "detection_rate": detection_rate,
         "self_defense_rate": self_defense_rate,

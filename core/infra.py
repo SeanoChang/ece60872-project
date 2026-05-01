@@ -3,10 +3,19 @@ import asyncio
 import os
 import secrets
 import signal
+import sys
 import time
 from pathlib import Path
 
 import httpx
+
+
+# Use the same Python interpreter the experiment runner is running under,
+# rather than bare "python". On macOS `/usr/bin/python` is a disabled Apple
+# stub (returns Permission denied); on conda envs `python` may not be on
+# PATH unless the env is activated. `sys.executable` always resolves to
+# the currently-running Python, which guarantees subprocess compatibility.
+_PYTHON_EXEC = sys.executable
 
 
 # Env-var allowlist for subprocesses. Prevents leakage of unrelated credentials
@@ -108,7 +117,7 @@ class InfrastructureServices:
         # `host.docker.internal:host-gateway` (maps to the bridge gateway IP, not
         # loopback). CLI defaults remain 127.0.0.1 for standalone invocation.
         proxy_proc = await asyncio.create_subprocess_exec(
-            "python", "-m", "core.api_proxy",
+            _PYTHON_EXEC, "-m", "core.api_proxy",
             "--host", "0.0.0.0",
             "--port", str(self.proxy_port),
             stdout=proxy_log,
@@ -117,7 +126,7 @@ class InfrastructureServices:
         )
 
         honeypot_proc = await asyncio.create_subprocess_exec(
-            "python", "-m", "core.honeypot",
+            _PYTHON_EXEC, "-m", "core.honeypot",
             "--host", "0.0.0.0",
             "--port", str(self.honeypot_port),
             stdout=honeypot_log,
@@ -126,7 +135,7 @@ class InfrastructureServices:
         )
 
         orchestrator_proc = await asyncio.create_subprocess_exec(
-            "python", "-m", "core.orchestrator",
+            _PYTHON_EXEC, "-m", "core.orchestrator",
             "--config", self.orchestrator_config_path,
             "--host", "0.0.0.0",
             "--port", str(self.orchestrator_port),

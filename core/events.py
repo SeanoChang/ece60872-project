@@ -64,6 +64,7 @@ class ScenarioRunEnd(_EventBase):
         "false_positive",
         "benign_completed",
         "already_solved",
+        "agent_hung",
         "infra_failed",
     ]
 
