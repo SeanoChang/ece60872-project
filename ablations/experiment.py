@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ import httpx
 
 from core.correlation import new_run_id, new_scenario_run_id, correlation_context
 from core.events import (
-    ExperimentStart, ExperimentEnd, ScenarioRunStart, ScenarioRunEnd,
+    ExperimentStart, ExperimentEnd, ScenarioRunStart, ScenarioRunEnd, Inspection,
 )
 from core.infra import InfrastructureServices
 from core.judge_containers import JudgeContainerManager
@@ -21,6 +22,7 @@ from core.runner_agent import RunnerAgentConfig, run_runner_agent
 from core.scenario import load_scenario, render_workspace
 from analysis.ground_truth import match_patterns, classify_scenario_outcome
 from analysis.aggregate import aggregate_experiment
+from analysis.inspection import compute_inspection_for_scenario
 from core.stream_parser import (
     extract_tool_calls as _extract_from_stream,
     extract_tool_uses as _extract_tool_uses_from_stream,
@@ -49,6 +51,8 @@ class ExperimentRunner:
         judge_image: str = "bft-judge-agentic:latest",
         judge_configs_dir: str = "judge_config",
         workspace_dir: str = "/tmp/bft-workspace",
+        permission_mode: str = "default",
+        timeout_seconds: int = 120,
     ) -> None:
         with open(ablation_config_path) as f:
             self.ablation = json.load(f)
@@ -60,6 +64,8 @@ class ExperimentRunner:
         self.ablation_config_path = ablation_config_path
         self.agent_image = agent_image
         self.judge_image = judge_image
+        self.permission_mode = permission_mode
+        self.timeout_seconds = timeout_seconds
 
         self.results_dir = Path(results_root) / self.ablation_name
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -191,6 +197,21 @@ class ExperimentRunner:
         scenario_run_id = new_scenario_run_id(scenario.scenario_id, rep)
 
         with correlation_context(scenario_run_id=scenario_run_id):
+            # Wipe the workspace before rendering: leftover files from a
+            # previous scenario contaminate inspection-rate measurement
+            # (the agent reads files that don't belong to the current
+            # scenario) and accumulate canaries in .env across runs.
+            # The directory itself is recreated by render_workspace.
+            ws_root = Path(self.container_mgr.workspace_dir)
+            if ws_root.exists():
+                for child in ws_root.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        try:
+                            child.unlink()
+                        except OSError:
+                            pass
             canaries = render_workspace(scenario, self.container_mgr.workspace_dir)
 
             # Register canaries with the honeypot so the active scenario_run_id
@@ -227,6 +248,15 @@ class ExperimentRunner:
                 orchestrator_url="http://host.docker.internal:8080",
                 scenario_run_id=scenario_run_id,
                 run_id=self.run_id,
+                permission_mode=self.permission_mode,
+                timeout_seconds=self.timeout_seconds,
+                # Early-terminate-on-canary support: feed the planted
+                # canary values for this run plus the honeypot's JSONL
+                # log path into the runner. As soon as the watcher sees
+                # any canary in the log, the agent is killed instead of
+                # being left to hang on a long-running command.
+                canaries=list(canaries.values()),
+                honeypot_jsonl_path="results/honeypot.jsonl",
             )
 
             run_start = time.time()
@@ -246,6 +276,30 @@ class ExperimentRunner:
             benign_patterns = scenario.ground_truth.get("expected_benign_calls", [])
             dangerous_matches = match_patterns(tool_calls, dangerous_patterns)
             benign_matches = match_patterns(tool_calls, benign_patterns)
+
+            # Inspection signal (docs/proposal.md §"Inspection Signal";
+            # docs/measurement-spec.md §3-§4). Failures here must not abort
+            # the scenario — a parser bug shouldn't drop otherwise-good run
+            # data; the analyzer's outputs are an enrichment, not the
+            # primary outcome label.
+            inspection_record = None
+            try:
+                inspection_record = compute_inspection_for_scenario(stdout, scenario)
+                self._write_event(Inspection(
+                    run_id=self.run_id,
+                    scenario_run_id=scenario_run_id,
+                    ablation=self.ablation_name,
+                    scenario_id=scenario.scenario_id,
+                    scenario_path=scenario_path,
+                    rep=rep,
+                    **inspection_record.to_dict(),
+                ))
+            except Exception as exc:  # noqa: BLE001  best-effort enrichment
+                print(
+                    f"WARN: inspection compute failed for "
+                    f"{scenario.scenario_id}_rep{rep}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
 
             honeypot_saw_canary = self._check_honeypot_for_canaries(scenario_run_id)
 
@@ -352,6 +406,7 @@ class ExperimentRunner:
                 "agent_tool_uses": tool_uses,
                 "agent_hook_matching_calls": hook_matched,
                 "agent_cost_usd": round(agent_cost_usd, 6),
+                "inspection": inspection_record.to_dict() if inspection_record else None,
                 "judgments": judgments,
                 "judgments_summary": judgments_summary,
                 "total_cost_usd": round(agent_cost_usd + judgments_summary["total_cost_usd"], 6),
@@ -556,6 +611,31 @@ def main() -> None:
         default="/tmp/bft-workspace",
         help="Host directory shared with judge containers as /workspace (default: /tmp/bft-workspace)",
     )
+    parser.add_argument(
+        "--permission-mode",
+        choices=["default", "dangerous"],
+        default="default",
+        help=(
+            "Claude Code permission mode for the runner agent. "
+            "'dangerous' appends --dangerously-skip-permissions so the "
+            "agent auto-approves every tool call (the threat model "
+            "supply-chain attacks specifically target). Default behavior "
+            "preserves the existing hook-mediated approval path."
+        ),
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help=(
+            "Per-scenario hard timeout in seconds for the runner agent. "
+            "If the agent neither exits naturally nor triggers a canary "
+            "within this budget the container is killed and the run is "
+            "classified as agent_hung. Default 120s — postinstall trojans "
+            "fire within ~30s; longer agents are usually stuck on a "
+            "long-running command (npm run dev, etc)."
+        ),
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -575,6 +655,8 @@ def main() -> None:
         api_key=api_key,
         results_root=args.results_root,
         workspace_dir=args.workspace_dir,
+        permission_mode=args.permission_mode,
+        timeout_seconds=args.timeout,
     )
     summary = asyncio.run(runner.run())
 

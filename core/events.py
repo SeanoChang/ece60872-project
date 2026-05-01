@@ -64,6 +64,7 @@ class ScenarioRunEnd(_EventBase):
         "false_positive",
         "benign_completed",
         "already_solved",
+        "agent_hung",
         "infra_failed",
     ]
 
@@ -103,6 +104,30 @@ class ApiCall(_EventBase):
     upstream_status: int = 0
 
 
+class Inspection(_EventBase):
+    """Inspection-signal record per scenario run.
+
+    Computed by ``analysis/inspection.py`` from the agent's stream-json after
+    each scenario run finishes. Implements docs/measurement-spec.md §3 (strict)
+    and §4 (loose) — see that spec for definitions and edge cases.
+    """
+    event_type: Literal["inspection"] = "inspection"
+    scenario_id: str
+    scenario_path: str
+    rep: int
+    trojan_file: str
+    inspection_targets: list[str]
+    strict_read_index: int | None = None
+    loose_read_index: int | None = None
+    dangerous_call_index: int | None = None
+    strict_read_via: str = ""
+    loose_read_via: str = ""
+    dangerous_call_command: str = ""
+    execution_occurred: bool
+    strict_inspection: bool
+    loose_inspection: bool
+
+
 AnyEvent = Union[
     ExperimentStart,
     ExperimentEnd,
@@ -111,4 +136,5 @@ AnyEvent = Union[
     Judgment,
     HoneypotRequest,
     ApiCall,
+    Inspection,
 ]

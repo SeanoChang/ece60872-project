@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from core.agentic_judge import run_agentic_judge
+from core.judges.agentic import run_agentic_judge
 from core.correlation import (
     correlation_context,
     current_run_id,
