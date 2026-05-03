@@ -51,6 +51,7 @@ async def _launch_judge_with_delay(
     judge_name: str,
     model_id: str,
     transcript_dir: str | None,
+    timeout_seconds: int,
 ) -> JudgeVote:
     if delay > 0:
         await asyncio.sleep(delay)
@@ -59,6 +60,7 @@ async def _launch_judge_with_delay(
         tool_call=tool_call,
         judge_name=judge_name,
         model_id=model_id,
+        timeout_seconds=timeout_seconds,
         transcript_dir=transcript_dir,
     )
 
@@ -77,6 +79,7 @@ async def run_judges(
             judge_name=config.name,
             model_id=config.model,
             transcript_dir=transcript_dir,
+            timeout_seconds=config.timeout_seconds,
         )
         for i, config in enumerate(judge_configs)
     ]

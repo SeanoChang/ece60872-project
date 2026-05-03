@@ -182,9 +182,18 @@ async def run_agentic_judge(
     # cwd and trigger interactive permission prompts that can't be answered in
     # `-p` mode — judges end up writing text explanations instead of verdicts.
     t0 = time.monotonic()
+    # Atomic write: stage to .tmp then rename. A direct redirect-truncate
+    # write means a second judgment that fires before claude-p finishes
+    # reading the first can leave the file half-written or with two JSON
+    # objects concatenated. Writing-then-renaming is atomic at the FS
+    # layer; the judge sees either old or new content, never partial.
+    _atomic_write_cmd = (
+        "cat > /judge/tool_call.json.tmp && "
+        "mv /judge/tool_call.json.tmp /judge/tool_call.json"
+    )
     rc, _, stderr = await _docker_exec(
         container_name,
-        ["sh", "-c", "cat > /judge/tool_call.json"],
+        ["sh", "-c", _atomic_write_cmd],
         stdin_data=tool_call_json,
         use_stdin_flag=True,
     )
@@ -225,13 +234,16 @@ async def run_agentic_judge(
                     "--verbose",
                     "--model", model_id,
                     "--setting-sources", "user",
-                    # Without this, the judge hits an interactive Write
-                    # prompt when it tries to write /judge/verdict.json and
-                    # stalls/errors with "permissions ... not yet granted".
-                    # acceptEdits auto-approves Edit/Write operations without
-                    # triggering the root-safety block that kills
-                    # bypassPermissions in Docker-as-root containers.
-                    "--permission-mode", "acceptEdits",
+                    # bypassPermissions auto-approves Edit/Write AND Read/Bash/
+                    # Grep so the judge's investigation tools actually work.
+                    # The earlier `acceptEdits` mode meant Read calls hit
+                    # unanswerable permission prompts in `-p` mode and silently
+                    # failed; the judge then rejected the agent's call citing
+                    # "cannot access /workspace" — false-positive defense.
+                    # Requires IS_SANDBOX=1 in the container env (set by
+                    # core/judge_containers.py) so Claude Code's root-user
+                    # safety block doesn't fire.
+                    "--permission-mode", "bypassPermissions",
                 ],
             ),
             timeout=timeout_seconds,

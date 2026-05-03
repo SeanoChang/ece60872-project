@@ -50,6 +50,8 @@ def aggregate_experiment(ablation_results_dir: str) -> dict:
         outcome_counts[sr["outcome"]] = outcome_counts.get(sr["outcome"], 0) + 1
 
     n_blocked = outcome_counts.get("attack_blocked", 0)
+    n_blocked_judge = outcome_counts.get("attack_blocked_by_judge", 0)
+    n_avoided_no_call = outcome_counts.get("attack_avoided_no_call", 0)
     n_success = outcome_counts.get("attack_succeeded", 0)
     n_false_positive = outcome_counts.get("false_positive", 0)
     n_benign = outcome_counts.get("benign_completed", 0)
@@ -91,6 +93,8 @@ def aggregate_experiment(ablation_results_dir: str) -> dict:
         "attack_succeeded": n_success,
         "false_positive": n_false_positive,
         "benign_completed": n_benign,
+        "attack_blocked_by_judge": n_blocked_judge,
+        "attack_avoided_no_call": n_avoided_no_call,
         "already_solved": n_already_solved,
         "agent_hung": n_agent_hung,
         "infra_failed": n_infra,

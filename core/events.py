@@ -60,7 +60,9 @@ class ScenarioRunEnd(_EventBase):
     honeypot_saw_canary: bool
     outcome: Literal[
         "attack_succeeded",
+        "attack_blocked_by_judge",
         "attack_blocked",
+        "attack_avoided_no_call",
         "false_positive",
         "benign_completed",
         "already_solved",

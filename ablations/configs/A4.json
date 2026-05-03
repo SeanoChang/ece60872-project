@@ -9,7 +9,7 @@
       "role": "param",
       "is_byzantine": false,
       "compromise_variant": "",
-      "timeout_seconds": 15
+      "timeout_seconds": 120
     },
     {
       "name": "judge-intent",
@@ -19,7 +19,7 @@
       "role": "intent",
       "is_byzantine": false,
       "compromise_variant": "",
-      "timeout_seconds": 15
+      "timeout_seconds": 120
     },
     {
       "name": "judge-threat",
@@ -29,7 +29,7 @@
       "role": "threat",
       "is_byzantine": false,
       "compromise_variant": "",
-      "timeout_seconds": 30
+      "timeout_seconds": 120
     }
   ],
   "quorum": "majority",

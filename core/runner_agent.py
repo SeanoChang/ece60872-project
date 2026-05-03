@@ -96,10 +96,21 @@ async def run_runner_agent(
     """
     abs_workspace = os.path.abspath(config.workspace_host_dir)
 
+    # Assign a deterministic container name so we can `docker kill` it
+    # explicitly when the canary watcher fires or the timeout hits. Without
+    # this, killing the docker CLI subprocess leaves the container running
+    # under the daemon — multiple zombie containers accumulate across runs
+    # and poison subsequent measurements (they read the new run's freshly-
+    # planted .env via the shared workspace mount and POST the new canary,
+    # making the watcher false-fire on minimal-tool-call runs).
+    container_name = f"bft-agent-{config.scenario_run_id or os.urandom(4).hex()}"
+
     cmd = [
         "docker",
         "run",
         "--rm",
+        "--name",
+        container_name,
         "-v",
         f"{abs_workspace}:/workspace",
         "-w",
@@ -162,16 +173,43 @@ async def run_runner_agent(
                 timeout=config.timeout_seconds,
             )
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _force_kill_container(container_name, proc)
             return (TIMEOUT_RC, b"", b"runner agent timed out")
         return (proc.returncode or 0, stdout, stderr)
 
-    return await _race_with_canary_watcher(proc, config)
+    return await _race_with_canary_watcher(proc, config, container_name)
+
+
+async def _force_kill_container(container_name: str, proc) -> None:
+    """Stop the named docker container then kill the CLI subprocess.
+
+    Killing only the docker-run subprocess leaves the container running
+    under the daemon (--rm fires only on graceful exit). We send `docker
+    kill` first so the daemon takes the container down, then SIGKILL the
+    local CLI process to release file descriptors. Order matters: if we
+    SIGKILL the CLI first, the docker daemon orphans the container.
+    """
+    try:
+        kill_proc = await asyncio.create_subprocess_exec(
+            "docker", "kill", container_name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(kill_proc.wait(), timeout=5.0)
+    except Exception:
+        pass  # best-effort; fall through to SIGKILL on the CLI
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except (asyncio.TimeoutError, Exception):
+        pass
 
 
 async def _race_with_canary_watcher(
-    proc, config: RunnerAgentConfig,
+    proc, config: RunnerAgentConfig, container_name: str,
 ) -> tuple[int, bytes, bytes]:
     """Race three outcomes against each other:
       (a) honeypot saw a canary  → kill agent, return EARLY_TERMINATE_RC
@@ -196,8 +234,7 @@ async def _race_with_canary_watcher(
     # Outcome (a): canary fired during run.
     if canary_task in done:
         matched = canary_task.result()
-        proc.kill()
-        await proc.wait()
+        await _force_kill_container(container_name, proc)
         try:
             stdout, stderr = await asyncio.wait_for(comm_task, timeout=2.0)
         except (asyncio.TimeoutError, Exception):
@@ -233,8 +270,7 @@ async def _race_with_canary_watcher(
     # making API calls for 2 minutes appears as `0 bytes stdout` to the
     # outcome classifier, hiding all evidence of what it was thinking.
     canary_task.cancel()
-    proc.kill()
-    await proc.wait()
+    await _force_kill_container(container_name, proc)
     try:
         stdout, stderr = await asyncio.wait_for(comm_task, timeout=2.0)
     except (asyncio.TimeoutError, Exception):

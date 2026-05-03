@@ -1,0 +1,3 @@
+decision,n_judgments,mean_latency_ms,median_latency_ms,mean_input_tok,mean_output_tok,mean_cache_read_tok,mean_cache_write_tok,mean_cost_total_usd,mean_cost_input_usd,mean_cost_cache_read_usd,mean_cost_cache_write_usd,mean_cost_output_usd
+reject,143,37160.6,35399.0,403,3571,387367,7818,0.06677,0.0004,0.03874,0.00977,0.01786
+approve,346,28258.6,27083.4,282,2676,284944,5199,0.04865,0.00028,0.02849,0.0065,0.01338

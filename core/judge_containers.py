@@ -78,6 +78,14 @@ class JudgeContainerManager:
             "environment": {
                 "ANTHROPIC_BASE_URL": self.proxy_url,
                 "ANTHROPIC_API_KEY": "proxied",
+                # Tells Claude Code "this is an intentional sandbox" so the
+                # root-user safety block on bypassPermissions doesn't fire.
+                # Without this, judge investigation tools (Read, Bash, Grep)
+                # hit unanswerable permission prompts in `-p` mode and fail,
+                # which the judge interprets as "can't verify → reject" —
+                # producing inflated reject rates that look like threat
+                # detection but are actually access failures.
+                "IS_SANDBOX": "1",
             },
             "volumes": {
                 os.path.abspath(self.workspace_dir): {
