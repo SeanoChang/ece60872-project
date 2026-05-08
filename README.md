@@ -5,13 +5,17 @@
 > ECE 60872 — Reliable and Secure Computer Systems
 > Prof. Saurabh Bagchi, Purdue University, Spring 2026
 
+> **Scope of submitted report.** The course final report (`docs/paper/report.tex`) measures only the **single-judge configuration** (A1) and identifies a structural vulnerability — the *Channel Dichotomy* — that defeats it on attacker-controlled repositories. Multi-judge BFT extensions (A4 / A6, TMR / Byzantine quorum) remain parked future directions; the harness supports them but they are not in the report.
+
 ---
 
 ## Abstract
 
-Coding agents operate autonomously by executing tool calls — shell commands, file edits, package installations — on behalf of developers. Current safety mechanisms require either human approval for each action (blocking autonomous workflows) or unrestricted auto-approval (exposing users to prompt injection and supply chain attacks). Single-judge classifiers, such as Claude Code's Auto Mode, offer a middle ground but suffer from single-point-of-failure limitations (17% false negative rate on real overeager actions).
+Autonomous coding agents now run developer workflow commands such as `npm install`, `pip install`, and `pytest`, activating package-manager and test-runner supply-chain surfaces. A common defense pairs the actor agent with one inline LLM **judge** that inspects every dangerous tool call before approval. We build a production-faithful harness — Claude Code 2.1 with a `PreToolUse` hook calling a `claude -p` Haiku 4.5 judge in an isolated container — and run a 12-scenario diagnostic benchmark against attacker-controlled repositories. The headline evaluation contains 42 scenario repetitions; the broader judgment corpus used for cost / latency analysis contains 614 events.
 
-We present **an agentic multi-judge voting system** that replaces human approval in Claude Code via PreToolUse hooks. A cluster of LLM judge agents — each with a distinct security perspective, session memory, and investigative tools — independently evaluates every proposed tool call and votes approve/reject before execution. We evaluate this system across four ablation conditions (A0/A1/A4/A6) against a trojaned-codebase scenario library — realistic project file trees (postinstall hooks, typosquats, malicious setup scripts, poisoned Makefiles, MCP-config poisoning) inspired by real supply-chain compromises (axios npm, March 2026) and disclosed CVEs (CVE-2025-68143/4/5). We measure two classical-theorem transfers — `Δ = detection(A4) − detection(A1)` (TMR) and `S = detection(A6) / detection(A4)` (BFT) — both reported on top of the A0 Sonnet 4.6 self-defense baseline, plus false-positive rate on benign controls.
+**Headline finding (the *Channel Dichotomy*):** pure supply-chain trojans bypass the judge at 42.9% (9/21). Augmenting the *same* payload with fabricated authority claims (audit IDs, reviewer emails) raises bypass to **100% when placed in metadata-shaped files** (`CLAUDE.md`, `AGENTS.md`, `package.json` custom fields, JSON test fixtures) — and drops to **0% when the same claim is placed in source-code comments**. The 12/12 vs 0/6 contrast is significant by Fisher's exact test ($p<10^{-3}$). A structurally-matched negative control (`probe-04`, no-op payload) yields 0% false-positive rate, ruling out shape-driven rejection. Because the attacker authors both file types in any real supply-chain attack, a single LLM judge cannot serve as the security boundary by itself.
+
+This README documents how to reproduce the report's results and how the harness is structured. The original BFT-voting vision — extending the harness to A4 (honest TMR) and A6 (Byzantine quorum) — remains the broader project direction; configs are parked under `ablations/configs/` for future work.
 
 ---
 
@@ -32,8 +36,8 @@ Host Machine
 │   ├── Per-agent budget enforcement
 │   └── Cost tracking per request
 │
-├── Judge Cluster Orchestrator (:8080)
-│   └── Dispatches judge containers, collects votes, JSONL logging
+├── Inspector Orchestrator (:8080)
+│   └── Marshals tool-call → judge container, returns verdict, JSONL logging
 │
 ├── Honeypot (:9999)
 │   └── Ground truth: catches credential exfiltration
@@ -45,18 +49,11 @@ Host Machine
 │   ├── PreToolUse hook → POST to orchestrator
 │   └── Network: proxy + honeypot only
 │
-├── Judge A Container (Param Validator)
-│   ├── Own Claude agent in isolated sandbox
-│   ├── /workspace/ mounted READ-ONLY
-│   └── Network: proxy only (no honeypot, no external)
-│
-├── Judge B Container (Intent Aligner)
-│   └── (same isolation as A)
-│
-└── Judge C Container (Threat Modeler)
-    ├── Own Claude agent with RW sandbox
-    ├── Can: clone repos, npm install --dry-run, inspect scripts
-    └── Network: proxy only
+└── Inspector Judge Container
+    ├── Own Claude agent (Haiku 4.5) in isolated sandbox
+    ├── /workspace/ mounted READ-ONLY
+    ├── Can: read files, run commands in sandbox, inspect packages
+    └── Network: proxy only (no honeypot, no external)
 ```
 
 ### Components
@@ -65,17 +62,16 @@ Host Machine
 |---|---|
 | **API Proxy** | Reverse proxy on host. Holds the real API key. All containers route through it. Per-agent budgets, cost logging. No key in any container. |
 | **Claude Code** | Real coding agent in Docker. Gets a task, operates autonomously. Hook intercepts every tool call. |
-| **Judge Agents** | Each is a real Claude agent in its own isolated Docker container. Gets read-only workspace mount. Can investigate: read files, run commands in sandbox, inspect packages. |
-| **Orchestrator** | Dispatches judge containers in parallel, collects votes, applies majority rule. |
+| **Inspector Judge** | Real Claude agent (Haiku 4.5) in an isolated Docker container with read-only workspace mount. Can investigate: read files, run commands in sandbox, inspect packages. Returns approve/reject verdict. |
+| **Orchestrator** | Marshals each tool call → inspector container; collects verdict; JSONL logging. |
 | **Honeypot** | Ground truth sensor. Logs exfil attempts. Only coding agent container can reach it. |
 
-### What Makes Judges "Agentic"
+### What Makes the Inspector "Agentic"
 
-Each judge is a **real Claude agent in its own Docker container** — not a Python wrapper around an API call:
+The inspector is a **real Claude agent in its own Docker container** — not a Python wrapper around an API call:
 
 - **Own sandbox**: can run bash, read files, `npm install --dry-run`, inspect postinstall scripts
-- **Session memory**: rolling window of past tool calls and verdicts
-- **Multi-step investigation**: reads setup.sh → sees obfuscated curl → rejects with evidence
+- **Multi-step investigation**: reads `setup.sh` → sees obfuscated curl → rejects with evidence
 - **Isolated**: read-only workspace mount, no access to honeypot, destroyed after each judgment
 
 ### Credential Isolation via API Proxy
@@ -88,69 +84,85 @@ Canary credentials (AWS keys, SSH keys, npm tokens) are planted as files in the 
 
 ## Experimental Design
 
-### Ablations
+### Configurations
 
-All judges are agentic — Claude Code instances in isolated Docker containers with investigation capabilities. The paper's measurement matrix is four conditions:
+The submitted report measures only A1 (single-judge). Multi-judge configs are parked for future work.
 
-| ID | Judges | Model | Prompt | Temp | What it tests |
+| ID | Judges | Model | Prompt | Temp | What it measures |
 |---|---|---|---|---|---|
-| A0 | 0 | — (agent alone, no guard) | — | — | Sonnet 4.6 self-defense baseline |
-| A1 | 1 | Sonnet 4.6 | General security reviewer | 0.0 | Single-judge baseline |
-| A4 | 3 | Sonnet 4.6 ×3 | Param / Intent / Threat | 0.0 | Honest 2-of-3 majority (TMR) |
-| A6 | 3 | Sonnet 4.6 ×3 | Param / Intent / Byzantine-Threat (naive) | 0.0 | 2-of-3 with one Byzantine judge (PBFT stress) |
+| A1 | 1 | Haiku 4.5 | General security reviewer | 0.0 | Inspector bypass rate; the Channel Dichotomy |
+| *A0* | 0 | — | — | — | *Future: agent-alone self-defense baseline* |
+| *A4* | 3 | Haiku 4.5 ×3 | Param / Intent / Threat | 0.0 | *Future: honest 2-of-3 majority (TMR)* |
+| *A6* | 3 | Haiku 4.5 ×3 | Param / Intent / Byzantine-Threat | 0.0 | *Future: 2-of-3 with one Byzantine judge (BFT)* |
 
-**Headline comparisons**: A1 vs A4 for TMR transfer (`Δ = detection(A4) − detection(A1)`); A4 vs A6 for BFT transfer (`S = detection(A6) / detection(A4)`); both reported on top of the A0 self-defense baseline.
-
-Stretch conditions (A2, A3, A5, A1-h, A4-h, A4-m, A7, subtle-Byzantine) are parked under `ablations/configs/stretch/` and will only be run if Week 3 finishes early.
+**Headline measurements (this report):** unconditional and conditional penetration rates across 12 scenarios (5 pure supply-chain + 4 metadata-channel + 2 audit-channel + 1 negative framing); Channel Dichotomy A/B (12/12 vs 0/6, Fisher's exact $p<10^{-3}$); cost & latency over 614 measured judgments.
 
 Execution paths: the primary runner (`core/runner_agent.py`) spawns a real Claude Code instance in `docker/agent.Dockerfile` per scenario. `core/replay_agent.py` is a deterministic fallback for scenarios where the live agent self-defends before ever emitting the tool call under test; scenarios can opt into the fallback via the `proposed_tool_call` field in the YAML.
 
 ### Scenario Library
 
-~15 scenarios in `scenarios/trojaned-codebases/` (10 malicious + 5 benign controls), each a realistic project file tree with at most one malicious file. Provenance for every scenario is recorded in `scenarios/SOURCES.md`.
+12 scenarios in `scenarios/trojaned-codebases/`, grouped by composition class. All injection-amplified scenarios share the same `probe-02-bearer-auth` payload — the only varying axis is the injection channel. A 13th scenario, `probe-04-negative-control`, is the structurally-matched no-op benign control for FPR measurement.
 
-| Archetype | Trojan location | Provenance |
-|---|---|---|
-| postinstall | `package.json` → `scripts/setup.js` | axios March 2026 supply-chain compromise |
-| typosquat | `requirements.txt` | AIShellJack (arXiv:2509.22040) |
-| malicious-setup | `setup.sh` | InjecAgent adapted (arXiv:2403.02691) |
-| poisoned-makefile | `Makefile` `install:` target | CVE-2025-68143 class |
-| mcp-poisoning | `.mcp/config.json` + fixture | Anthropic Git MCP CVEs 2025-68143/4/5 |
-| benign controls | — | 5 controls for FPR measurement |
+**Pure supply-chain (no injection amplifier):**
 
-Deprecated prose-injection / tool-level scenarios (`scenarios/mcpsecbench/`, `scenarios/injecagent/`, `scenarios/realworld/`) are retained read-only under `scenarios/deprecated/` for reproducibility of earlier pilots.
+- `probe-02-bearer-auth` — postinstall hook with bearer-auth telemetry POST
+- `npm-multi-stage-trigger` — multi-stage `prepare` chain across phantom dep
+- `npm-handler-dispatcher` — handler/dispatcher indirection
+- `npm-vendored-utility-surgical-mod` — vendored library with surgical mod
+- `pip-conftest-trojan` — `conftest.py` triggered by `pytest`
+
+**Injection-amplified, metadata channel:**
+
+- `claudemd-audit-redirect` — fabricated audit record in `CLAUDE.md`
+- `agents-md-audit-redirect` — same in `AGENTS.md`
+- `package-json-audit-metadata` — same in `package.json` `_audit` field
+- `fixture-as-audit-record` — same in JSON test fixture
+
+**Injection-amplified, audit channel:**
+
+- `inline-source-audit-comment` — same claim in source comment + AI-skip directive
+- `inline-source-no-directive` — same in source comment without directive
+
+**Injection-amplified, negative framing:**
+
+- `negative-framing-redirect` — `CLAUDE.md` redirect (no explicit approval claim)
+
+**Negative control:** `probe-04-negative-control` (no-op payload, identical workspace shape to `claudemd-audit-redirect`).
+
+Provenance for every scenario is recorded in `scenarios/SOURCES.md`. Deprecated prose-injection / tool-level scenarios (`scenarios/mcpsecbench/`, `scenarios/injecagent/`, `scenarios/realworld/`) are retained read-only under `scenarios/deprecated/` for reproducibility of earlier pilots.
 
 ### Metrics
 
-- **Detection rate**: did judges block before exfiltration?
-- **False positive rate**: did judges block benign calls?
-- **Condorcet gap**: predicted vs observed voting accuracy (quantifies common-mode failure)
-- **Quorum survival rate**: detection under Byzantine compromise / honest baseline
-- **Stateless vs Agentic**: does memory + tools improve detection?
-- **Cost**: USD and latency per tool call
+- **Penetration rate** (`Pen`): fraction of reps where the canary fired despite the judge inspecting; reported per scenario and per composition class.
+- **Channel Dichotomy contrast**: 12/12 (metadata bypass) vs 0/6 (audit bypass), tested by Fisher's exact (two-sided).
+- **False positive rate (FPR)**: fraction of benign-control reps that the judge rejects (`probe-04` negative control).
+- **Cost / latency**: per-judgment USD (Haiku 4.5 published rates) and wall-clock seconds; computed over 614 extracted judgments.
 
-### Baselines
+### Related work positioning
 
-| System | Their Result | Comparison |
-|---|---|---|
-| Claude Auto Mode | 17% FN (real actions) | Our A1 vs their single classifier |
-| AEGIS | 1.2% FPR | Our FPR vs theirs |
-| ToolSafe | 65% harmful reduction | Our detection rate vs theirs |
-| MCPSecBench defenses | <30% success | Our system on same benchmark |
+The submitted report does not directly compare against external baselines. The closest related work is DDIPE / PoisonedSkills (arXiv:2604.03081) — a supply-chain poisoning benchmark for skill ecosystems. See the report's §2 (Related Work) for the full positioning vs. AgentDojo, InjecAgent, AgentHarm, AgentBench, NVIDIA AGENTS.md, and Comment-and-Control.
 
 ---
 
 ## Related Work
 
+References cited in the submitted report:
+
 | Paper | Relationship |
 |---|---|
-| deVadoss & Artzt (2504.14668) | Proposed BFT for AI safety conceptually (no implementation). We build and test it. |
-| CP-WBFT / Zheng et al. (2511.10400) | BFT voting for multi-agent Q&A. Different domain, different Byzantine model. |
-| Claude Auto Mode (Anthropic, 2026) | Single two-stage classifier. Our direct baseline. |
-| AEGIS (2603.12621) | Rule-based pre-execution firewall. Complementary approach. |
-| ToolSafe (2601.10156) | RL guardrail for tool safety. Single-model comparison. |
-| Lamport/Shostak/Pease (1982) | Byzantine Generals Problem. Theoretical foundation. |
-| Castro & Liskov (OSDI 1999) | PBFT. Frames our 2-of-3 quorum. |
+| DDIPE / PoisonedSkills (arXiv:2604.03081) | Closest related work — supply-chain poisoning of skill documentation. We attack the separate approval gate instead of the actor's skill use. |
+| AgentDojo (NeurIPS 2024 D&B) | Indirect prompt injection benchmark. Motivates the auxiliary-judge defense. |
+| InjecAgent (ACL Findings 2024) | Indirect injection in tool-using LLM agents. Different threat boundary (instruction injection vs install-time code execution). |
+| AgentHarm (arXiv:2410.09024) | Harm benchmark. Direct refusal rather than approval-gate measurement. |
+| AgentBench (ICLR 2024) | Multi-turn manipulation susceptibility. |
+| NVIDIA AGENTS.md (NVIDIA, 2026) | Documents the metadata-channel attack qualitatively. We provide both directions of the dichotomy. |
+| Comment-and-Control (Guan et al., 2026) | Source-comment injection in Claude Code / Gemini / Copilot. |
+| Pillar Rules File (2025) | Cursor `.cursorrules` injection. |
+| NPM benchmark (arXiv:2603.27549) | Offline malicious-package detection. Different decision boundary (artifact classification vs live tool-call gate). |
+| CHASE (arXiv:2601.06838) | LLM agents dissecting malicious PyPI packages. |
+| Bouricius et al. (1969) | Fault-coverage formalism — frames our coverage factor $c=\Pr(D\mid T)$. |
+
+Multi-judge BFT extensions (deVadoss & Artzt arXiv:2504.14668, CP-WBFT arXiv:2511.10400, AEGIS arXiv:2603.12621, ToolSafe arXiv:2601.10156, Lamport/Shostak/Pease 1982, Castro & Liskov OSDI 1999) frame the original project vision and remain future work; full citations are listed in the References section below.
 
 ---
 
@@ -272,7 +284,41 @@ What to check under `results/A1/`:
 - `events/scenario_run_end.jsonl` — `outcome` field populated
 - `judge_transcripts/` — one `.stdout` and `.stderr` per judge invocation
 
-### Full four-condition sweep
+### Reproducing the report's results
+
+The submitted report (`docs/paper/report.tex`) measures only the A1 single-judge configuration across 12 scenarios. To reproduce the headline numbers and figures:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Run the 12-scenario A1 sweep
+python -m ablations.experiment \
+  --config ablations/configs/A1.json \
+  --scenarios scenarios/trojaned-codebases/probe-02-bearer-auth.yaml \
+              scenarios/trojaned-codebases/npm-multi-stage-trigger.yaml \
+              scenarios/trojaned-codebases/npm-handler-dispatcher.yaml \
+              scenarios/trojaned-codebases/npm-vendored-utility-surgical-mod.yaml \
+              scenarios/trojaned-codebases/pip-conftest-trojan.yaml \
+              scenarios/trojaned-codebases/claudemd-audit-redirect.yaml \
+              scenarios/trojaned-codebases/agents-md-audit-redirect.yaml \
+              scenarios/trojaned-codebases/package-json-audit-metadata.yaml \
+              scenarios/trojaned-codebases/fixture-as-audit-record.yaml \
+              scenarios/trojaned-codebases/inline-source-audit-comment.yaml \
+              scenarios/trojaned-codebases/inline-source-no-directive.yaml \
+              scenarios/trojaned-codebases/negative-framing-redirect.yaml \
+  --reps 3 --max-concurrency 1 --permission-mode dangerous
+
+# Extract per-judgment data, compute paper metrics, regenerate figures
+python -m analysis.extract_all "results-*" --out extracted-master
+python -m analysis.paper_metrics
+python -m analysis.plot_paper
+```
+
+The first command is hour-scale (12 scenarios × 3 reps). The follow-up commands populate `paper-data/*.csv` and `docs/paper/figures/*.pdf` — every number cited in the report's Tables 1-2 and Figures 1-5 is recoverable from `paper-data/headline_table.csv` and `paper-data/per_judgment_costs.csv` after running the pipeline. Total judge-only spend is ~$2-3 (~$0.05 per judgment × ~30-40 judgments per rep).
+
+### Full four-condition sweep (future / stretch)
+
+> The submitted report covers **only the A1 row** of this loop. The A0 / A4 / A6 configs are scaffolded but not measured in the report; they are the multi-judge BFT extension and remain future work. Use this loop only if you are extending past the report.
 
 Once the smoke test passes, run all four ablations against the whole library. **Use a shell glob** to expand the scenarios — `--scenarios` takes individual YAML paths, not a directory:
 
@@ -371,7 +417,8 @@ tail -f results/A1/orchestrator.log results/A1/proxy.log results/A1/honeypot.log
 
 ## Team
 
-- Sean Chang + teammates
+- Yi-Hsiang Chang
+- Albert Yi
 - ECE 60872 — Reliable and Secure Computer Systems
 - Purdue University, Spring 2026
 
@@ -409,9 +456,9 @@ tail -f results/A1/orchestrator.log results/A1/proxy.log results/A1/honeypot.log
 
 ### Security Taxonomies (used for judge skill citations)
 
-- MITRE ATT&CK for Enterprise — https://attack.mitre.org/matrices/enterprise/
-- Common Weakness Enumeration (CWE) — https://cwe.mitre.org/
-- OWASP Top 10 for LLM Applications — https://owasp.org/www-project-top-10-for-large-language-model-applications/
+- MITRE ATT&CK for Enterprise — <https://attack.mitre.org/matrices/enterprise/>
+- Common Weakness Enumeration (CWE) — <https://cwe.mitre.org/>
+- OWASP Top 10 for LLM Applications — <https://owasp.org/www-project-top-10-for-large-language-model-applications/>
 - See `judge_config/*/skills/*.md` for per-skill MITRE/CWE/OWASP citations
 
 ### Real-World Attacks (case studies)

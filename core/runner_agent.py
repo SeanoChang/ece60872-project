@@ -58,11 +58,11 @@ class RunnerAgentConfig:
     #   "default"   — interactive permission prompts; in -p mode this
     #                 effectively blocks any tool that requires permission
     #                 unless a PreToolUse hook approves it.
-    #   "dangerous" — appends --dangerously-skip-permissions so the agent
-    #                 auto-approves every tool call without consulting the
-    #                 hook layer. This is the threat model supply-chain
-    #                 attacks specifically target: the install hook fires
-    #                 before any inspection could intervene.
+    #   "dangerous" — appends --dangerously-skip-permissions. Claude's
+    #                 interactive permission prompts are skipped, but
+    #                 PreToolUse hooks still fire before matched tool calls.
+    #                 In A0, the orchestrator has no judges and auto-approves;
+    #                 in A1, the hook still routes through the single judge.
     permission_mode: str = "default"
     # Canary strings the runner should watch for in the honeypot JSONL log.
     # When any of these appears in the log the agent is killed early — the
@@ -155,7 +155,9 @@ async def run_runner_agent(
         "--verbose",
         # Claude Code 2.1+ requires an explicit setting source to load
         # ~/.claude/settings.json; without this the PreToolUse hook config
-        # is ignored and the judge layer never runs.
+        # is ignored and the judge layer never runs. This is still required
+        # when --dangerously-skip-permissions is set: bypass mode skips
+        # permission prompts, not PreToolUse hooks.
         "--setting-sources",
         "user",
     ]
