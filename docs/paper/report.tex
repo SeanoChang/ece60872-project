@@ -92,11 +92,11 @@ metadata-shaped files (\code{CLAUDE.md}, \code{AGENTS.md},
 \code{package.json} custom fields, JSON fixtures) raises bypass to
 \textbf{100\%} (12/12); the same claims in source comments drop
 bypass to \textbf{0\%} (0/6). The 100\%/0\% contrast is significant
-by Fisher's exact ($p<10^{-3}$). We call this the \textbf{Channel
+by Fisher's exact test ($p<10^{-3}$). We call this the \textbf{Channel
 Dichotomy}: the judge applies different trust standards to
 attacker-controlled text depending on whether it appears as project
-metadata or as source code. Two deterministic baselines (lifecycle
-scripts; network-token regex) anchor the result. The answer to the
+metadata or as source code. Two simple deterministic rule baselines
+(lifecycle scripts; network/config scanning) anchor the result. The answer to the
 title: \emph{one LLM judge is useful, but should not be the
 security boundary by itself}.
 \end{abstract}
@@ -137,17 +137,16 @@ replace human approval while preserving autonomy. We measure whether
 that replacement works for repository-level supply-chain attacks.
 
 \paragraph{Why an LLM-judge defense is plausible.} Agent-safety
-benchmarks suggest frontier LLMs resist many adversarial prompts:
-AgentDojo~\cite{agentdojo} reports majority defense against
-indirect prompt injection without auxiliary defenses;
-InjecAgent~\cite{injecagent} finds 10--50\% attack success across
-vectors with strong model variation; AgentHarm~\cite{agentharm}
-and AgentBench~\cite{agentbench} show frontier models refuse
-direct harmful requests but degrade under multi-turn manipulation.
-This baseline robustness makes the LLM-as-judge architecture
-appealing as a replacement for human approval (\dsp{} exists
-because users disable interactive prompts). We measure whether
-that replacement holds for repository-level supply-chain attacks.
+benchmarks provide mixed but non-trivial evidence that capable LLMs
+can resist some adversarial agent inputs: AgentDojo~\cite{agentdojo}
+and InjecAgent~\cite{injecagent} evaluate indirect prompt injection
+in tool-using agents; AgentHarm~\cite{agentharm} and
+AgentBench~\cite{agentbench} show that agentic settings expose
+failure modes beyond ordinary chat refusal and single-turn task
+performance. This makes the LLM-as-judge architecture plausible as
+a replacement for human approval (\dsp{} exists because users
+disable interactive prompts). We measure whether that replacement
+holds for repository-level supply-chain attacks.
 
 \paragraph{Open question.} Prior benchmarks measure
 \emph{instruction} injection or offline package detection.
@@ -207,7 +206,7 @@ rejection.
 30\,s per judgment under published Haiku 4.5 pricing; cache-read
 tokens dominate ($\sim$58\%).
 \item \textbf{Deterministic-rule baselines} (lifecycle-script,
-network-token regex) over the same 12 scenarios, anchoring the
+network/config scanning) over the same 12 scenarios, anchoring the
 LLM-judge result against non-LLM comparators
 (\S\ref{sec:rules}).
 \item \textbf{Structural soundness argument} (\S\ref{sec:structural})
@@ -311,7 +310,7 @@ attacker-registered domains.
 
 \paragraph{Defender configuration.} A coding agent
 (Claude Code 2.1, Haiku~4.5) runs under
-\dsp~\cite{anthropic2025} against an attacker-supplied repository.
+\dsp~\cite{anthropic-dsp} against an attacker-supplied repository.
 A \emph{single inline judge} -- a separate Haiku~4.5 instance with
 Read/Bash/Grep tools and read-only workspace mount -- inspects
 every proposed Bash/Edit/Write tool call before execution. We
@@ -554,7 +553,7 @@ attack viability. We report both.
 
 \paragraph{Cost.} Per-judgment cost is computed from per-message
 token counts in the \code{claude -p} stream-json transcript using
-the published Haiku-4.5 pricing schedule:
+the published Haiku-4.5 pricing schedule~\cite{anthropic-pricing}:
 \begin{equation}
   C_j \;=\; \frac{n^\text{in}_j}{10^6} \cdot \$1.00
         + \frac{n^\text{cR}_j}{10^6} \cdot \$0.10
@@ -934,10 +933,13 @@ Figure~\ref{fig:cost-decomp}.}
 
 A natural question is how the single-judge bypass rate measured here
 compares against existing defenses. We did not run quantitative
-head-to-head baselines and we want to be explicit about why, because
-the absences are not symmetric across baseline classes. We group the
-candidate baselines into four categories below; each carries a
-different obstacle.
+head-to-head comparisons against full external systems and we want
+to be explicit about why, because the absences are not symmetric
+across baseline classes. We group the candidate external baselines
+into four categories below; each carries a different obstacle. We
+then add two lightweight deterministic rule baselines
+(\S\ref{sec:rules}) over our own scenario matrix to provide a
+non-LLM reference point.
 
 \paragraph{Stronger LLM judges.} The most direct extension of this
 study is to swap Haiku~4.5 for a more capable inspector --- Sonnet~4.6
@@ -963,13 +965,13 @@ commercial scanners (Socket, Snyk) classify packages or code
 snippets offline against known IoCs --- a different unit of
 analysis than ours. To anchor the comparison anyway, we evaluate
 two cheap, scanner-style \emph{rules} (lifecycle-script presence,
-network-token regex) over the same 12 scenarios in
+network/config scanning) over the same 12 scenarios in
 \S\ref{sec:rules}. A full scanner-first-then-LLM defense is a
 distinct system worth future measurement; our scenarios provide
 that substrate.
 
 \paragraph{Other LLM guardrail systems.} Claude Auto
-Mode~\cite{anthropic2025}, AEGIS, ToolSafe, GuardAgent, and
+Mode~\cite{anthropic-auto2026}, AEGIS, ToolSafe, GuardAgent, and
 PromptArmor each propose an LLM-mediated approval layer. Auto Mode
 is server-side and not externally callable; the research systems
 ship harnesses unlike Claude Code's \texttt{PreToolUse} hook, so
@@ -1017,10 +1019,9 @@ LLM:
 \code{package.json} declares \code{preinstall}, \code{install},
 \code{postinstall}, or \code{prepare}, OR the repo contains a
 top-level \code{conftest.py}. Otherwise pass.
-\item \textbf{Rule B (network-token regex).} Block if any file
-referenced from a lifecycle hook (or transitively required from
-one) contains a literal \code{http://} or \code{https://}
-followed by a hostname. Otherwise pass.
+\item \textbf{Rule B (network/config scan).} Block if a lifecycle
+or test entry point reaches an outbound network sink plus an enabled
+literal endpoint/token configuration. Otherwise pass.
 \end{itemize}
 
 Both rules are evaluated by static inspection of the rendered
@@ -1035,7 +1036,7 @@ composition class and the false-positive rate on \code{probe-04}.
 evaluated over the same 12 attack scenarios and the \code{probe-04}
 negative control. Block rate counts reps in which the system
 prevents canary fire; FPR counts reps in which the system rejects
-the no-op control. Rules A and B are static-text scanners; the
+the no-op control. Rules A and B are shallow static scanners; the
 Haiku judge inspects with read-only investigation.}
 \label{tab:rule-baselines}
 \renewcommand{\arraystretch}{1.15}
@@ -1045,7 +1046,7 @@ Haiku judge inspects with read-only investigation.}
                 & \footnotesize{(n=21)} & \footnotesize{(n=12)} & \footnotesize{(n=6)} & \footnotesize{(n=3)} & \footnotesize{(n=5)} & \\
 \midrule
 Rule A: lifecycle scripts & 100\% & 100\% & 100\% & 100\% & 100\% & Cannot distinguish trojan from no-op (shape-only) \\
-Rule B: network-token grep & 100\% & 100\% & 100\% & 100\% & 0\% & Trivially evaded by base64 / DNS / fragmented strings \\
+Rule B: network/config scan & 100\% & 100\% & 100\% & 100\% & 0\% & Trivially evaded by base64 / DNS / fragmented strings \\
 \addlinespace
 Haiku 4.5 judge           & 57\%  & 0\%   & 100\% & 33\%  & 0\% & Channel-sensitive (metadata-mode trust) \\
 \bottomrule
@@ -1057,8 +1058,9 @@ scenario \emph{and} the benign control because the workspace shape
 of \code{probe-04} is identical to the metadata-channel attacks by
 construction; the rule has no behavioral signal to distinguish
 them. Rule~B exploits the fact that our scenarios use literal
-hostnames for canary delivery, so a substring scan is a perfect
-classifier in our matrix --- but a one-line obfuscation
+hostnames and enabled telemetry configuration for canary delivery,
+so a shallow semantic scan separates our matrix from the disabled
+\code{probe-04} control --- but a one-line obfuscation
 (\code{Buffer.from(\dots,'base64')}) defeats it. The Haiku judge
 is the only system whose verdicts vary with attacker behavior
 rather than file shape: it correctly approves the no-op control,
@@ -1231,6 +1233,7 @@ April 2026. \url{https://www.microsoft.com/en-us/security/blog/2026/04/01/mitiga
 A.~Tarr.
 \textit{Compromise of event-stream npm package}.
 Public disclosure, November 2018.
+\url{https://github.com/dominictarr/event-stream/issues/116}.
 \bibitem{ctx2022}
 GitLab Advisory Database.
 \textit{ctx package compromise: malicious code in \texttt{Ctx.\_\_init\_\_} exfiltrated \texttt{os.environ} to a remote endpoint (GMS-2022-1520)}.
@@ -1238,7 +1241,7 @@ May 2022. \url{https://advisories.gitlab.com/pypi/ctx/GMS-2022-1520/}.
 \bibitem{xzutils}
 A.~Freund.
 \textit{xz/liblzma backdoor (CVE-2024-3094)}.
-March 2024.
+March 2024. \url{https://www.openwall.com/lists/oss-security/2024/03/29/4}.
 \bibitem{uaparserjs2021}
 Rapid7.
 \textit{npm Library \texttt{ua-parser-js} Hijacked: What You Need to Know}.
@@ -1247,30 +1250,42 @@ October 2021. \url{https://www.rapid7.com/blog/post/2021/10/25/npm-library-ua-pa
 GitHub Security Advisory.
 \textit{Embedded malicious code in \texttt{node-ipc} (GHSA-97m3-w2cp-4xx6)}.
 March 2022. \url{https://github.com/advisories/GHSA-97m3-w2cp-4xx6}.
-\bibitem{anthropic2025}
+\bibitem{anthropic-dsp}
 Anthropic.
-\textit{Claude Code: dangerously-skip-permissions documentation}.
-2025.
+\textit{Claude Code development containers and permission bypass documentation}.
+2026. \url{https://docs.anthropic.com/en/docs/claude-code/devcontainer}.
+\bibitem{anthropic-auto2026}
+Anthropic.
+\textit{Claude Code auto mode: a safer way to skip permissions}.
+March 2026. \url{https://www.anthropic.com/engineering/claude-code-auto-mode}.
+\bibitem{anthropic-pricing}
+Anthropic.
+\textit{Claude API pricing}.
+2026. \url{https://platform.claude.com/docs/en/about-claude/pricing}.
 \bibitem{bouricius1969}
 W.~G.~Bouricius, W.~C.~Carter, P.~R.~Schneider.
 Reliability modeling techniques for self-repairing computer systems.
 \textit{Proc.\ ACM Annual Conference}, 1969.
+\url{https://research.ibm.com/publications/reliability-modeling-techniques-for-self-repairing-computer-systems}.
 \bibitem{agentdojo}
 E.~Debenedetti et al.
 \textit{AgentDojo: a benchmark for evaluating prompt injection attacks and defenses for LLM agents}.
 NeurIPS 2024 Datasets and Benchmarks.
+\url{https://proceedings.neurips.cc/paper_files/paper/2024/hash/97091a5177d8dc64b1da8bf3e1f6fb54-Abstract-Datasets_and_Benchmarks_Track.html}.
 \bibitem{injecagent}
 Q.~Zhan et al.
 \textit{InjecAgent: benchmarking indirect prompt injections in tool-integrated large language model agents}.
 ACL 2024 Findings.
+\url{https://aclanthology.org/2024.findings-acl.624/}.
 \bibitem{agentharm}
 M.~Andriushchenko et al.
 \textit{AgentHarm: a benchmark for measuring harmfulness of LLM agents}.
-arXiv:2410.09024, 2024.
+arXiv:2410.09024, 2024. \url{https://arxiv.org/abs/2410.09024}.
 \bibitem{agentbench}
 X.~Liu et al.
 \textit{AgentBench: evaluating LLMs as agents}.
 ICLR 2024.
+\url{https://proceedings.iclr.cc/paper_files/paper/2024/hash/e9df36b21ff4ee211a8b71ee8b7e9f57-Abstract-Conference.html}.
 \bibitem{nvidia-agentsmd2026}
 NVIDIA AI Red Team.
 \textit{Mitigating Indirect AGENTS.md Injection Attacks in Agentic Environments}.
@@ -1283,7 +1298,7 @@ April 2026. \url{https://oddguan.com/blog/comment-and-control-prompt-injection-c
 \bibitem{pillar-rulesfile}
 Pillar Security.
 \textit{New Vulnerability in GitHub Copilot and Cursor: How Hackers Can Weaponize Code Agents (Rules File Backdoor)}.
-2025.
+2025. \url{https://www.pillar.security/blog/new-vulnerability-in-github-copilot-and-cursor-how-hackers-can-weaponize-code-agents}.
 \bibitem{ddipe2026}
 Y.~Qu et al.
 \textit{Supply-Chain Poisoning Attacks Against LLM Coding Agent Skill Ecosystems (DDIPE)}.
@@ -1291,11 +1306,11 @@ arXiv:2604.03081, 2026. \url{https://huggingface.co/papers/2604.03081}.
 \bibitem{npmbench2026}
 W.~Guo et al.
 \textit{Understanding NPM Malicious Package Detection: A Benchmark-Driven Empirical Analysis}.
-arXiv:2603.27549, 2026.
+arXiv:2603.27549, 2026. \url{https://arxiv.org/abs/2603.27549}.
 \bibitem{chase2026}
 T.~Toda and T.~Mori.
 \textit{CHASE: LLM Agents for Dissecting Malicious PyPI Packages}.
-arXiv:2601.06838, 2026.
+arXiv:2601.06838, 2026. \url{https://arxiv.org/abs/2601.06838}.
 \end{thebibliography}
 
 %======================================================================
@@ -1307,7 +1322,8 @@ are version-controlled at
 \url{https://github.com/SeanoChang/ece60872-project}. Reproducing the
 results in this paper requires three things: a Docker daemon, a
 real Anthropic API key (for genuine model invocations), and Python
-3.10+ on the host.
+3.11+ on the host. The checked-in conda environment pins Python
+3.12.
 
 \paragraph{One-time setup.}
 \begin{verbatim}

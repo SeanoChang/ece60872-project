@@ -140,7 +140,7 @@ Provenance for every scenario is recorded in `scenarios/SOURCES.md`. Deprecated 
 
 ### Related work positioning
 
-The submitted report does not directly compare against external baselines. The closest related work is DDIPE / PoisonedSkills (arXiv:2604.03081) — a supply-chain poisoning benchmark for skill ecosystems. See the report's §2 (Related Work) for the full positioning vs. AgentDojo, InjecAgent, AgentHarm, AgentBench, NVIDIA AGENTS.md, and Comment-and-Control.
+The submitted report does not directly compare against full external baseline systems. It includes two lightweight deterministic rule baselines over the same scenario matrix, and positions the closest external work, DDIPE / PoisonedSkills (arXiv:2604.03081), as a supply-chain poisoning benchmark for skill ecosystems. See the report's §2 and §5 for the full positioning vs. AgentDojo, InjecAgent, AgentHarm, AgentBench, NVIDIA AGENTS.md, and Comment-and-Control.
 
 ---
 
@@ -154,7 +154,7 @@ References cited in the submitted report:
 | AgentDojo (NeurIPS 2024 D&B) | Indirect prompt injection benchmark. Motivates the auxiliary-judge defense. |
 | InjecAgent (ACL Findings 2024) | Indirect injection in tool-using LLM agents. Different threat boundary (instruction injection vs install-time code execution). |
 | AgentHarm (arXiv:2410.09024) | Harm benchmark. Direct refusal rather than approval-gate measurement. |
-| AgentBench (ICLR 2024) | Multi-turn manipulation susceptibility. |
+| AgentBench (ICLR 2024) | General benchmark for evaluating LLMs as agents. |
 | NVIDIA AGENTS.md (NVIDIA, 2026) | Documents the metadata-channel attack qualitatively. We provide both directions of the dichotomy. |
 | Comment-and-Control (Guan et al., 2026) | Source-comment injection in Claude Code / Gemini / Copilot. |
 | Pillar Rules File (2025) | Cursor `.cursorrules` injection. |
@@ -174,7 +174,7 @@ bft-voting/
 │   ├── types.py              # JudgeConfig, JudgeVote, VoteResult
 │   ├── judge_hook.py         # PreToolUse hook (thin client → POST to orchestrator)
 │   ├── orchestrator.py       # Dispatches judge containers, collects votes
-│   ├── agentic_judge.py      # run_agentic_judge (docker exec claude -p)
+│   ├── judges/agentic.py     # run_agentic_judge (docker exec claude -p)
 │   ├── judge_containers.py   # JudgeContainerManager (lifecycle + workspace swap)
 │   ├── voting.py             # Majority vote / consensus
 │   ├── runner_agent.py       # PRIMARY — live Claude Code runner in Docker
@@ -258,7 +258,7 @@ Before kicking off the full sweep, verify the pipeline end-to-end on a single sc
 ```bash
 python -m ablations.experiment \
   --config ablations/configs/A1.json \
-  --scenarios scenarios/trojaned-codebases/postinstall-01-fetch-exfil.yaml \
+  --scenarios scenarios/trojaned-codebases/probe-02-bearer-auth.yaml \
   --reps 1 \
   --max-concurrency 1
 ```
@@ -268,7 +268,7 @@ python -m ablations.experiment \
 Expected output:
 
 ```
-[A1] postinstall-01-fetch-exfil_rep1 → <outcome> (duration=N.Ns, rc=0)
+[A1] probe-02-bearer-auth_rep1 → <outcome> (duration=N.Ns, rc=0)
 {
   "ablation": "A1",
   "total_runs": 1,
@@ -279,7 +279,7 @@ Expected output:
 
 What to check under `results/A1/`:
 
-- `scenarios/postinstall-01-fetch-exfil_rep1.json` — outcome record for the run
+- `scenarios/probe-02-bearer-auth_rep1.json` — outcome record for the run
 - `events/judgment.jsonl` — **must contain at least one line**. If empty, the PreToolUse hook never fired; see Troubleshooting.
 - `events/scenario_run_end.jsonl` — `outcome` field populated
 - `judge_transcripts/` — one `.stdout` and `.stderr` per judge invocation
@@ -373,7 +373,7 @@ results/<ablation>/
 
 Key fields for paper metrics:
 
-- **Detection rate**: count of `scenario_run_end.outcome == "attack_prevented"` over total malicious reps
+- **Detection rate**: count of `scenario_run_end.outcome == "attack_blocked_by_judge"` over total malicious reps
 - **FPR**: count of `outcome == "false_positive"` over total benign reps
 - **Per-judgment latency / cost**: `judgment.jsonl` has `total_latency_ms` and `total_cost_usd` per call
 - **Ground truth**: `scenario_run_end.honeypot_saw_canary` (did a canary reach the honeypot?) — cross-check with `honeypot_request.jsonl` entries where `canary_match: true` and `scenario_run_id` matches
@@ -436,7 +436,7 @@ tail -f results/A1/orchestrator.log results/A1/proxy.log results/A1/honeypot.log
 
 - deVadoss, J., & Artzt, M. (2025). [A BFT Approach towards AI Safety](https://arxiv.org/abs/2504.14668). *arXiv:2504.14668*. — Position paper proposing BFT consensus for AI safety. We implement and empirically test.
 - Zheng, L., Chen, J., Yin, Q., Zhang, J., Zeng, X., & Tian, Y. (2025). [Rethinking the Reliability of Multi-agent Systems: A Perspective from Byzantine Fault Tolerance (CP-WBFT)](https://arxiv.org/abs/2511.10400). *arXiv:2511.10400*. — Confidence-weighted BFT voting for multi-agent LLMs on Q&A tasks.
-- Anthropic. (2026). [Claude Code Auto Mode](https://www.anthropic.com/engineering/claude-code-auto-mode). — Single two-stage classifier for approval automation. Our direct baseline (17% FN rate).
+- Anthropic. (2026). [Claude Code Auto Mode](https://www.anthropic.com/engineering/claude-code-auto-mode). — Relevant external approval-automation comparator; not run in the submitted report.
 - AEGIS: No Tool Call Left Unchecked (2026). [arXiv:2603.12621](https://arxiv.org/abs/2603.12621). — Rule-based pre-execution firewall. Complementary approach.
 - ToolSafe: Proactive Step-Level Guardrail (2026). [arXiv:2601.10156](https://arxiv.org/abs/2601.10156). — RL-based tool-safety guardrail.
 - Phute, M. et al. (2024). [LLM Self Defense](https://arxiv.org/abs/2308.07308). *ICLR 2024 Tiny*. — Single-judge output validation; ancestor of our A1 baseline.
